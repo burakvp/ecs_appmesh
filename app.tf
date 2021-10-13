@@ -136,7 +136,7 @@ resource "aws_appmesh_virtual_node" "app" {
   spec {
     backend {
       virtual_service {
-        virtual_service_name = "${local.app_name}.${var.prefix}.local"
+        virtual_service_name = "${local.app_name}.${var.prefix}"
       }
     }
 
@@ -184,7 +184,7 @@ resource "aws_appmesh_gateway_route" "app" {
   }
 }
 resource "aws_appmesh_virtual_service" "app" {
-  name      = "app.N760861.local"
+  name      = "app"
   mesh_name = aws_appmesh_mesh.ecs_mesh.name
 
   spec {
@@ -196,7 +196,7 @@ resource "aws_appmesh_virtual_service" "app" {
   }
 }
 resource "aws_service_discovery_service" "app" {
-  name = "${local.app_name}.${var.prefix}.local"
+  name = "${local.app_name}"
 
   dns_config {
     namespace_id = aws_service_discovery_private_dns_namespace.main.id

@@ -5,6 +5,8 @@ data "aws_availability_zones" "available" {}
 
 resource "aws_vpc" "ecs_vpc" {
   cidr_block = "172.17.0.0/16"
+  enable_dns_support = "true"
+  enable_dns_hostnames = "true"
 }
 
 # Create var.az_count private_ecs subnets, each in a different AZ
