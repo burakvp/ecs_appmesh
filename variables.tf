@@ -3,6 +3,17 @@ variable "aws_region" {
   default     = "us-east-1"
 }
 
+variable "mesh_name" {
+  description = "The name of mesh"
+  default     = "fargate"
+}
+
+variable "prefix" {
+  description = "The AWS region to create things in."
+  default     = "N760861"
+}
+
+
 variable "aws_account_id" {
   description = "AWS account ID"
 }
@@ -17,9 +28,19 @@ variable "app_image" {
   default     = "adongy/hostname-docker:latest"
 }
 
+variable "ecs_gateway_image" {
+  description = "Docker image to run in the ECS cluster"
+  default     = "840364872350.dkr.ecr.us-east-1.amazonaws.com/aws-appmesh-envoy:v1.17.2.0-prod"
+}
+
 variable "app_port" {
   description = "Port exposed by the docker image to redirect traffic to"
   default     = 3000
+}
+
+variable "ecs_gateway_port" {
+  description = "Port exposed by the docker image to redirect traffic to"
+  default     = 8080
 }
 
 variable "app_count" {

@@ -1,0 +1,212 @@
+# Traffic to the ECS Cluster should only come from the ALB
+locals {
+  app_name = "app"
+}
+resource "aws_security_group" "ecs_app_task" {
+  name        = "${var.prefix}-${var.mesh_name}-${local.app_name}"
+  description = "Allow from application gateway"
+  vpc_id      = "${aws_vpc.ecs_vpc.id}"
+
+  ingress {
+    protocol        = "tcp"
+    from_port       = "${var.app_port}"
+    to_port         = "${var.app_port}"
+    security_groups = ["${aws_security_group.ecs_gateway.id}", aws_security_group.bastion-sg.id]
+  }
+
+  ingress {
+    protocol        = "tcp"
+    from_port       = "9901"
+    to_port         = "9901"
+    security_groups = ["${aws_security_group.ecs_gateway.id}", aws_security_group.bastion-sg.id]
+  }
+
+  egress {
+    protocol    = "-1"
+    from_port   = 0
+    to_port     = 0
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+}
+
+resource "aws_ecs_task_definition" "app" {
+  family                   = "${var.prefix}-${var.mesh_name}-${local.app_name}"
+  network_mode             = "awsvpc"
+  requires_compatibilities = ["FARGATE"]
+  cpu                      = "${var.fargate_cpu}"
+  memory                   = "${var.fargate_memory}"
+  task_role_arn             = aws_iam_role.ecs_task_execution_role.arn
+  // attach a role to definition described in role.tf
+  execution_role_arn        = aws_iam_role.ecs_task_execution_role.arn
+  container_definitions = <<DEFINITION
+[
+  {
+    "cpu": ${var.fargate_cpu},
+    "image": "${var.app_image}",
+    "memory": ${var.fargate_memory},
+    "name": "${var.prefix}-${var.mesh_name}-${local.app_name}",
+    "networkMode": "awsvpc",
+    "portMappings": [
+      {
+        "containerPort": ${var.app_port},
+        "hostPort": ${var.app_port}
+      }
+    ]
+  },
+  {
+    "name": "${var.prefix}-${var.mesh_name}-${local.app_name}-proxy",
+    "image": "840364872350.dkr.ecr.us-east-1.amazonaws.com/aws-appmesh-envoy:v1.17.2.0-prod",
+    "essential": true,
+    "networkMode": "awsvpc",
+    "memoryReservation": 256,
+    "environment": [
+      {
+        "name": "APPMESH_VIRTUAL_NODE_NAME",
+        "value": "mesh/${var.prefix}-${var.mesh_name}/virtualNode/${var.prefix}-${var.mesh_name}-${local.app_name}"
+      }
+    ],  
+    "portMappings": [
+        {
+          "hostPort": 9901,
+          "protocol": "tcp",
+          "containerPort": 9901
+        }
+    ],
+    "healthCheck": {
+      "command": [
+        "CMD-SHELL",
+        "curl -s http://localhost:9901/server_info | grep state | grep -q LIVE"
+      ],
+      "startPeriod": 10,
+      "interval": 5,
+      "timeout": 2,
+      "retries": 3
+    },
+    "user": "1337",
+    "logConfiguration": {
+      "logDriver": "awslogs",
+      "options": {
+        "awslogs-group": "/ecs/${var.prefix}",
+        "awslogs-region": "${var.aws_region}",
+        "awslogs-stream-prefix": "envoy${var.prefix}"
+      }
+    },
+    "ulimits": [
+      {
+        "softLimit": 15000,
+        "hardLimit": 15000,
+        "name": "nofile"
+      }
+    ]
+  }
+]
+DEFINITION
+  proxy_configuration {
+    type           = "APPMESH"
+    container_name = "${var.prefix}-${var.mesh_name}-${local.app_name}-proxy"
+    properties = {
+      AppPorts         = "${var.app_port}"
+      EgressIgnoredIPs = "169.254.170.2,169.254.169.254"
+      IgnoredUID       = "1337"
+      ProxyEgressPort  = 15001
+      ProxyIngressPort = 15000
+    }
+  }
+}
+
+resource "aws_ecs_service" "app" {
+  name            = "${var.prefix}-${var.mesh_name}-${local.app_name}"
+  cluster         = "${aws_ecs_cluster.ecs_vpc.id}"
+  task_definition = "${aws_ecs_task_definition.app.arn}"
+  desired_count   = "${var.app_count}"
+  launch_type     = "FARGATE"
+  service_registries {
+    registry_arn = aws_service_discovery_service.app.arn
+  }
+  network_configuration {
+    security_groups = ["${aws_security_group.ecs_app_task.id}"]
+    subnets         = "${aws_subnet.private_ecs.*.id}"
+  }
+}
+
+resource "aws_appmesh_virtual_node" "app" {
+  name      = "${var.prefix}-${var.mesh_name}-${local.app_name}"
+  mesh_name = aws_appmesh_mesh.ecs_mesh.name
+
+  spec {
+    backend {
+      virtual_service {
+        virtual_service_name = "${local.app_name}.${var.prefix}.local"
+      }
+    }
+
+    listener {
+      port_mapping {
+        port     = var.app_port
+        protocol = "http"
+      }
+    }
+    logging {
+      access_log {
+        file {
+          path = "/dev/stdout"
+        }
+      }
+    }
+    service_discovery {
+      aws_cloud_map {
+        namespace_name =  aws_service_discovery_private_dns_namespace.main.name
+        service_name = aws_service_discovery_service.app.name
+      }
+    }
+  }
+}
+
+resource "aws_appmesh_gateway_route" "app" {
+  name                 = "${var.prefix}-${var.mesh_name}-${local.app_name}-route"
+  mesh_name            = aws_appmesh_mesh.ecs_mesh.name
+  virtual_gateway_name = aws_appmesh_virtual_gateway.ecs_gateway.name
+
+  spec {
+    http_route {
+      action {
+        target {
+          virtual_service {
+            virtual_service_name = aws_appmesh_virtual_service.app.name
+          }
+        }
+      }
+
+      match {
+        prefix = "/"
+      }
+    }
+  }
+}
+resource "aws_appmesh_virtual_service" "app" {
+  name      = "app.N760861.local"
+  mesh_name = aws_appmesh_mesh.ecs_mesh.name
+
+  spec {
+    provider {
+      virtual_node {
+        virtual_node_name = aws_appmesh_virtual_node.app.name
+      }
+    }
+  }
+}
+resource "aws_service_discovery_service" "app" {
+  name = "${local.app_name}.${var.prefix}.local"
+
+  dns_config {
+    namespace_id = aws_service_discovery_private_dns_namespace.main.id
+    dns_records {
+      ttl  = 10
+      type = "A"
+    }
+    routing_policy = "MULTIVALUE"
+  }
+  health_check_custom_config {
+    failure_threshold = 1
+  }
+}
