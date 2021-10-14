@@ -67,5 +67,5 @@ variable "fargate_memory" {
 
 variable "bastion_pubkey" {
   description = "Fargate instance memory to provision (in MiB)"
-  default     = "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAACAQDNHqHEhyJVy5vlPacO1QqOdVNXJB/jSYHoSykLeK/8NvfGc7SdPi4WmvbCrBL/12qSvhVi7/8VYgclVM1QfqZ3OBLShTJSAVr5pn67Z1KrG5GALlS0qJadEmqVzjjxy9sy//WS2xAw0yxiwWjRjj0KMlAb3SBqxqeTIJVGd5DVlC091zyRCJq3G4xYGpHOPF7t3mWTJyW0jCeFQqO3fux6cqGjNG9hE3WcHDzxGjG2JofVwTjAZC/rjPRYGHF1Cg0MaJXUyJhbbMKiUooN8xxmDt5qRGKq0CzM3nuxsP3H8bV6St/DwQQTchs8Vz5XWOjHPibOjTWIQsZcfycbtckO/R3fMg7RsEzHm1dVSgqg/tDRNDJG+sFZQcM+BAf19xL5Ea3HIt5NbdQ+okTkv2fZJBRrreJh7iDf8R6Uu6whX7PRGdZ/77/qVSzrYM8Mek/UiEZ1Yn2pJrszIuBOiF7VuqcbhRP4juc7EW3KlOR3+AJXUVWSGUbyP+8Q26LWaxkkucyPGxF8u2nEQ8+tkQBpIqFXpDowCoFVR3+OFwUTnKF4IiJYB2dExwHAyfesy5BFFcyLTOYs/LdpCenqneP5ONDmlksAqLilDse2oOv7hmhjgUeqmoOA+Ukygr7R9DrU23CVxjtjIhUzeoAf3ya0KUt9mxhBd5kXOf/UllEAyQ== vitalii.burak@jmpchase.com"
+  default     = ""
 }
