@@ -2,23 +2,36 @@ package main
 
 import (
 	"fmt"
+	"io/ioutil"
 	"log"
 	"net/http"
 	"os"
-	"time"
-	"io/ioutil"
 )
 
 func httpHandler(w http.ResponseWriter, r *http.Request) {
 	var err error
-	var hostname string
-	resp, err := http.Get(os.Getenv("BACKEND_URL"))
-	responseData,err := ioutil.ReadAll(resp.Body)
-	fmt.Printf("%s - [%s] %s %s %s\n", hostname, time.Now().Format(time.RFC1123), r.RemoteAddr, r.Method, r.URL)
+	var hostname, backend_url string
+
+	hostname, err = os.Hostname()
 	if err != nil {
-		log.Fatal(err)
+		log.Fatalln(err)
 	}
-	fmt.Fprintf(w, "Backend Responded: %s", string(responseData))
+	backend_url = os.Getenv("BACKEND_URL")
+	fmt.Printf("Requesting BACKEND_URL: %s\n", backend_url)
+	resp, err := http.Get(backend_url)
+	if err != nil {
+		fmt.Printf("Backend Failed to respond: %s", err)
+		fmt.Fprintf(w, "Hello I'm frontend: %s\nBackend Failed to respond: %s", hostname, err)
+	} else {
+		responseData, err := ioutil.ReadAll(resp.Body)
+		if err != nil {
+			fmt.Printf("Backend Failed to respond: %s", err)
+			fmt.Fprintf(w, "Hello I'm frontend: %s\nBackend Failed to respond: %s", hostname, err)
+		} else {
+			fmt.Printf("Backend responded: %s", string(responseData))
+			fmt.Fprintf(w, "Hello I'm frontend: %s\nBackend responded: %s", hostname, string(responseData))
+		}
+	}
 }
 
 func main() {

@@ -5,17 +5,18 @@ variable "aws_region" {
 
 variable "mesh_name" {
   description = "The name of mesh"
-  default     = "fargate"
+  default     = "poc"
 }
 
 variable "prefix" {
   description = "The AWS region to create things in."
-  default     = "N760861"
+  default     = "vb"
 }
 
 
 variable "aws_account_id" {
   description = "AWS account ID"
+  default = "514072627411"
 }
 
 variable "az_count" {
@@ -23,10 +24,16 @@ variable "az_count" {
   default     = "2"
 }
 
-variable "app_image" {
+variable "frontend_image" {
   description = "Docker image to run in the ECS cluster"
-  default     = "514072627411.dkr.ecr.us-east-2.amazonaws.com/backend:0.0.1"
+  default     = "514072627411.dkr.ecr.us-east-2.amazonaws.com/frontend:0.0.6"
 }
+
+variable "backend_image" {
+  description = "Docker image to run in the ECS cluster"
+  default     = "514072627411.dkr.ecr.us-east-2.amazonaws.com/backend:0.0.3"
+}
+
 
 variable "ecs_gateway_image" {
   description = "Docker image to run in the ECS cluster"
@@ -38,7 +45,7 @@ variable "app_port" {
   default     = 3000
 }
 
-variable "ecs_gateway_port" {
+variable "app_gateway_port" {
   description = "Port exposed by the docker image to redirect traffic to"
   default     = 8080
 }

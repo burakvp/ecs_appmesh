@@ -1,9 +1,9 @@
 # Traffic to the ECS Cluster should only come from the ALB
 locals {
-  app_name = "app"
+  backend_name = "backend"
 }
-resource "aws_security_group" "ecs_app_task" {
-  name        = "${var.prefix}-${var.mesh_name}-${local.app_name}"
+resource "aws_security_group" "ecs_backend_task" {
+  name        = "${var.prefix}-${var.mesh_name}-${local.backend_name}"
   description = "Allow from application gateway"
   vpc_id      = "${aws_vpc.ecs_vpc.id}"
 
@@ -11,14 +11,14 @@ resource "aws_security_group" "ecs_app_task" {
     protocol        = "tcp"
     from_port       = "${var.app_port}"
     to_port         = "${var.app_port}"
-    security_groups = ["${aws_security_group.ecs_gateway.id}", aws_security_group.bastion-sg.id]
+    security_groups = ["${aws_security_group.app_gateway.id}", aws_security_group.bastion-sg.id, aws_security_group.ecs_frontend_task.id]
   }
 
   ingress {
     protocol        = "tcp"
     from_port       = "9901"
     to_port         = "9901"
-    security_groups = ["${aws_security_group.ecs_gateway.id}", aws_security_group.bastion-sg.id]
+    security_groups = ["${aws_security_group.app_gateway.id}", aws_security_group.bastion-sg.id]
   }
 
   egress {
@@ -29,8 +29,8 @@ resource "aws_security_group" "ecs_app_task" {
   }
 }
 
-resource "aws_ecs_task_definition" "app" {
-  family                   = "${var.prefix}-${var.mesh_name}-${local.app_name}"
+resource "aws_ecs_task_definition" "backend" {
+  family                   = "${var.prefix}-${var.mesh_name}-${local.backend_name}"
   network_mode             = "awsvpc"
   requires_compatibilities = ["FARGATE"]
   cpu                      = "${var.fargate_cpu}"
@@ -42,10 +42,18 @@ resource "aws_ecs_task_definition" "app" {
 [
   {
     "cpu": ${var.fargate_cpu},
-    "image": "${var.app_image}",
+    "image": "${var.backend_image}",
     "memory": ${var.fargate_memory},
-    "name": "${var.prefix}-${var.mesh_name}-${local.app_name}",
+    "name": "${var.prefix}-${var.mesh_name}-${local.backend_name}",
     "networkMode": "awsvpc",
+    "logConfiguration": {
+      "logDriver": "awslogs",
+      "options": {
+        "awslogs-group": "/ecs/${var.prefix}",
+        "awslogs-region": "${var.aws_region}",
+        "awslogs-stream-prefix": "${local.backend_name}${var.prefix}"
+      }
+    },
     "portMappings": [
       {
         "containerPort": ${var.app_port},
@@ -54,7 +62,7 @@ resource "aws_ecs_task_definition" "app" {
     ]
   },
   {
-    "name": "${var.prefix}-${var.mesh_name}-${local.app_name}-proxy",
+    "name": "${var.prefix}-${var.mesh_name}-${local.backend_name}-proxy",
     "image": "840364872350.dkr.ecr.us-east-1.amazonaws.com/aws-appmesh-envoy:v1.17.2.0-prod",
     "essential": true,
     "networkMode": "awsvpc",
@@ -62,7 +70,7 @@ resource "aws_ecs_task_definition" "app" {
     "environment": [
       {
         "name": "APPMESH_VIRTUAL_NODE_NAME",
-        "value": "mesh/${var.prefix}-${var.mesh_name}/virtualNode/${var.prefix}-${var.mesh_name}-${local.app_name}"
+        "value": "mesh/${var.prefix}-${var.mesh_name}/virtualNode/${var.prefix}-${var.mesh_name}-${local.backend_name}"
       },
       {
         "name": "ENABLE_ENVOY_XRAY_TRACING",
@@ -126,7 +134,7 @@ resource "aws_ecs_task_definition" "app" {
 DEFINITION
   proxy_configuration {
     type           = "APPMESH"
-    container_name = "${var.prefix}-${var.mesh_name}-${local.app_name}-proxy"
+    container_name = "${var.prefix}-${var.mesh_name}-${local.backend_name}-proxy"
     properties = {
       AppPorts         = "${var.app_port}"
       EgressIgnoredIPs = "169.254.170.2,169.254.169.254"
@@ -137,31 +145,31 @@ DEFINITION
   }
 }
 
-resource "aws_ecs_service" "app" {
-  name            = "${var.prefix}-${var.mesh_name}-${local.app_name}"
+resource "aws_ecs_service" "backend" {
+  name            = "${var.prefix}-${var.mesh_name}-${local.backend_name}"
   cluster         = "${aws_ecs_cluster.ecs_vpc.id}"
-  task_definition = "${aws_ecs_task_definition.app.arn}"
+  task_definition = "${aws_ecs_task_definition.backend.arn}"
   desired_count   = "${var.app_count}"
   launch_type     = "FARGATE"
   service_registries {
-    registry_arn = aws_service_discovery_service.app.arn
+    registry_arn = aws_service_discovery_service.backend.arn
   }
   network_configuration {
-    security_groups = ["${aws_security_group.ecs_app_task.id}"]
+    security_groups = ["${aws_security_group.ecs_backend_task.id}"]
     subnets         = "${aws_subnet.private_ecs.*.id}"
   }
 }
 
-resource "aws_appmesh_virtual_node" "app" {
-  name      = "${var.prefix}-${var.mesh_name}-${local.app_name}"
+resource "aws_appmesh_virtual_node" "backend" {
+  name      = "${var.prefix}-${var.mesh_name}-${local.backend_name}"
   mesh_name = aws_appmesh_mesh.ecs_mesh.name
 
   spec {
-    backend {
-      virtual_service {
-        virtual_service_name = "${local.app_name}.${var.prefix}"
-      }
-    }
+    # backend {
+    #   virtual_service {
+    #     virtual_service_name = "${local.backend_name}.${var.prefix}"
+    #   }
+    # }
 
     listener {
       port_mapping {
@@ -179,47 +187,47 @@ resource "aws_appmesh_virtual_node" "app" {
     service_discovery {
       aws_cloud_map {
         namespace_name =  aws_service_discovery_private_dns_namespace.main.name
-        service_name = aws_service_discovery_service.app.name
+        service_name = aws_service_discovery_service.backend.name
       }
     }
   }
 }
 
-resource "aws_appmesh_gateway_route" "app" {
-  name                 = "${var.prefix}-${var.mesh_name}-${local.app_name}-route"
-  mesh_name            = aws_appmesh_mesh.ecs_mesh.name
-  virtual_gateway_name = aws_appmesh_virtual_gateway.ecs_gateway.name
+# resource "aws_appmesh_gateway_route" "backend" {
+#   name                 = "${var.prefix}-${var.mesh_name}-${local.backend_name}-route"
+#   mesh_name            = aws_appmesh_mesh.ecs_mesh.name
+#   virtual_gateway_name = aws_appmesh_virtual_gateway.app_gateway.name
 
-  spec {
-    http_route {
-      action {
-        target {
-          virtual_service {
-            virtual_service_name = aws_appmesh_virtual_service.app.name
-          }
-        }
-      }
+#   spec {
+#     http_route {
+#       action {
+#         target {
+#           virtual_service {
+#             virtual_service_name = aws_appmesh_virtual_service.backend.name
+#           }
+#         }
+#       }
 
-      match {
-        prefix = "/"
-      }
-    }
-  }
-}
-resource "aws_appmesh_virtual_service" "app" {
-  name      = "app"
+#       match {
+#         prefix = "/"
+#       }
+#     }
+#   }
+# }
+resource "aws_appmesh_virtual_service" "backend" {
+  name      = "backend.${var.prefix}.local"
   mesh_name = aws_appmesh_mesh.ecs_mesh.name
 
   spec {
     provider {
       virtual_node {
-        virtual_node_name = aws_appmesh_virtual_node.app.name
+        virtual_node_name = aws_appmesh_virtual_node.backend.name
       }
     }
   }
 }
-resource "aws_service_discovery_service" "app" {
-  name = "${local.app_name}"
+resource "aws_service_discovery_service" "backend" {
+  name = "${local.backend_name}"
 
   dns_config {
     namespace_id = aws_service_discovery_private_dns_namespace.main.id

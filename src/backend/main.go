@@ -16,7 +16,7 @@ func httpHandler(w http.ResponseWriter, r *http.Request) {
 		log.Fatalln(err)
 	}
 	fmt.Printf("%s - [%s] %s %s %s\n", hostname, time.Now().Format(time.RFC1123), r.RemoteAddr, r.Method, r.URL)
-	fmt.Fprintf(w, "Backend Response: %s", hostname)
+	fmt.Fprintf(w, "Hello I'm backend: %s", hostname)
 }
 
 func main() {
