@@ -64,3 +64,8 @@ variable "fargate_memory" {
   description = "Fargate instance memory to provision (in MiB)"
   default     = "512"
 }
+
+variable "bastion_pubkey" {
+  description = "Fargate instance memory to provision (in MiB)"
+  default     = ""
+}
