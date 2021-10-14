@@ -66,6 +66,10 @@ resource "aws_ecs_task_definition" "ecs_gateway" {
       {
         "name": "APPMESH_VIRTUAL_NODE_NAME",
         "value": "mesh/${var.prefix}-${var.mesh_name}/virtualGateway/${var.prefix}-${var.mesh_name}-ecs_gateway"
+      },
+      {
+        "name": "ENABLE_ENVOY_XRAY_TRACING",
+        "value": "1"
       }
       ],
     "portMappings": [
@@ -104,6 +108,25 @@ resource "aws_ecs_task_definition" "ecs_gateway" {
         "hardLimit": 15000,
         "name": "nofile"
       }
+    ]
+  },
+  {
+    "name": "xray-daemon",
+    "image": "amazon/aws-xray-daemon",
+    "logConfiguration": {
+      "logDriver": "awslogs",
+      "options": {
+        "awslogs-group": "/ecs/${var.prefix}",
+        "awslogs-region": "${var.aws_region}",
+        "awslogs-stream-prefix": "xray${var.prefix}"
+      }
+    },
+    "portMappings" : [
+        {
+            "hostPort": 2000,
+            "containerPort": 2000,
+            "protocol": "udp"
+        }
     ]
   }
 ]

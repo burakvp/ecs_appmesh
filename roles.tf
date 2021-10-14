@@ -34,3 +34,9 @@ resource "aws_iam_role_policy_attachment" "ecs_appmesh_envoy_access_role" {
   role        = aws_iam_role.ecs_task_execution_role.name
   policy_arn  = "arn:aws:iam::aws:policy/AWSAppMeshEnvoyAccess"
 }
+
+// ecs task allow xray permissions 
+resource "aws_iam_role_policy_attachment" "ecs_xray_write_role" {
+  role        = aws_iam_role.ecs_task_execution_role.name
+  policy_arn  = "arn:aws:iam::aws:policy/AWSXRayDaemonWriteAccess"
+}

@@ -25,7 +25,7 @@ variable "az_count" {
 
 variable "app_image" {
   description = "Docker image to run in the ECS cluster"
-  default     = "adongy/hostname-docker:latest"
+  default     = "514072627411.dkr.ecr.us-east-2.amazonaws.com/backend:0.0.1"
 }
 
 variable "ecs_gateway_image" {

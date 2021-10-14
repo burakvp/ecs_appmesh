@@ -1,0 +1,10 @@
+version: "3.9"  # optional since v1.27.0
+services:
+  frontend:
+    image: frontend
+    ports:
+      - "3000:3000"
+    environment:
+      - BACKEND_URL=http://backend:3000
+  backend:
+    image: backend
