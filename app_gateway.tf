@@ -9,7 +9,7 @@ resource "aws_alb" "ecs_vpc" {
 resource "aws_alb_target_group" "app_gateway" {
   name        = "${var.prefix}-${var.mesh_name}-app-gateway"
   port        = var.app_gateway_port
-  protocol    = "HTTP"
+  protocol    = "HTTPS"
   vpc_id      = "${aws_vpc.ecs_vpc.id}"
   target_type = "ip"
 }
@@ -35,12 +35,14 @@ resource "aws_security_group" "lb" {
     from_port   = 80
     to_port     = 80
     cidr_blocks = ["69.181.181.129/32"]
+    ipv6_cidr_blocks = ["2607:fb90:9eb8:9ba4:f06d:2670:16e9:8b03/128"]
   }
   egress {
     from_port = 0
     to_port   = 0
     protocol  = "-1"
     cidr_blocks = ["0.0.0.0/0"]
+    ipv6_cidr_blocks = ["::/0"]
   }
 }
 resource "aws_ecs_task_definition" "app_gateway" {
@@ -169,7 +171,7 @@ resource "aws_security_group" "app_gateway" {
     protocol        = "tcp"
     from_port       = "${var.app_gateway_port}"
     to_port         = "${var.app_gateway_port}"
-    security_groups = ["${aws_security_group.lb.id}"]
+    security_groups = ["${aws_security_group.lb.id}", aws_security_group.bastion-sg.id]
   }
   ingress {
     protocol        = "tcp"
@@ -197,12 +199,37 @@ resource "aws_appmesh_virtual_gateway" "app_gateway" {
         }
       }
     }
+    backend_defaults {
+      client_policy {
+        tls {
+          validation {
+            subject_alternative_names {
+              match {
+                exact = [aws_appmesh_virtual_service.frontend.name]
+              }
+            }
+            trust {
+              acm {
+                certificate_authority_arns = [aws_acmpca_certificate_authority.mesh_ca.arn]
+              }
+            }
+          }
+        }
+      }
+    }
     listener {
       port_mapping {
         port     = var.app_gateway_port
         protocol = "http"
       }
-
+      tls {
+        certificate {
+          acm {
+            certificate_arn = aws_acm_certificate.gateway_cert.arn
+          }
+        }
+        mode = "STRICT"
+      }
       health_check {
         port                = var.app_gateway_port
         protocol            = "http"
@@ -230,5 +257,17 @@ resource "aws_service_discovery_service" "app_gateway" {
   }
   health_check_custom_config {
     failure_threshold = 1
+  }
+}
+
+
+# Certificate
+
+resource "aws_acm_certificate" "gateway_cert" {
+  domain_name       = "gateway.${var.prefix}.${var.root_mesh_domain}"
+  certificate_authority_arn = aws_acmpca_certificate_authority.mesh_ca.arn
+
+  lifecycle {
+    create_before_destroy = true
   }
 }

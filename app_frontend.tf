@@ -56,7 +56,7 @@ resource "aws_ecs_task_definition" "frontend" {
     "environment": [
       {
         "name": "BACKEND_URL",
-        "value": "http://backend.${var.prefix}.local:3000"
+        "value": "http://backend.${var.prefix}.${var.root_mesh_domain}:3000"
       }
     ],
     "portMappings": [
@@ -173,12 +173,37 @@ resource "aws_appmesh_virtual_node" "frontend" {
     backend {
       virtual_service {
         virtual_service_name = aws_appmesh_virtual_service.backend.name
+        client_policy {
+          tls {
+            validation {
+              subject_alternative_names {
+                match {
+                  exact = [aws_appmesh_virtual_service.backend.name] 
+                }
+              }
+              trust {
+                acm {
+                  certificate_authority_arns = [aws_acmpca_certificate_authority.mesh_ca.arn]
+                }
+              }
+            }
+          }
+        }
       }
     }
     listener {
       port_mapping {
         port     = var.app_port
         protocol = "http"
+      }
+      tls {
+        mode = "STRICT"
+        certificate {
+          acm {
+            certificate_arn = aws_acm_certificate.frontend_cert.arn
+
+          }
+        } 
       }
     }
     logging {
@@ -211,7 +236,6 @@ resource "aws_appmesh_gateway_route" "frontend" {
           }
         }
       }
-
       match {
         prefix = "/"
       }
@@ -219,7 +243,7 @@ resource "aws_appmesh_gateway_route" "frontend" {
   }
 }
 resource "aws_appmesh_virtual_service" "frontend" {
-  name      = "frontend"
+  name      = "${local.frontend_name}.${var.prefix}.${var.root_mesh_domain}"
   mesh_name = aws_appmesh_mesh.ecs_mesh.name
 
   spec {
@@ -243,5 +267,15 @@ resource "aws_service_discovery_service" "frontend" {
   }
   health_check_custom_config {
     failure_threshold = 1
+  }
+}
+
+# # Certificate
+resource "aws_acm_certificate" "frontend_cert" {
+  domain_name       = "${local.frontend_name}.${var.prefix}.${var.root_mesh_domain}"
+  certificate_authority_arn = aws_acmpca_certificate_authority.mesh_ca.arn
+
+  lifecycle {
+    create_before_destroy = true
   }
 }

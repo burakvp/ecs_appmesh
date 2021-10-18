@@ -40,3 +40,46 @@ resource "aws_iam_role_policy_attachment" "ecs_xray_write_role" {
   role        = aws_iam_role.ecs_task_execution_role.name
   policy_arn  = "arn:aws:iam::aws:policy/AWSXRayDaemonWriteAccess"
 }
+
+resource "aws_iam_role_policy_attachment" "cert-policy" {
+  role       = aws_iam_role.ecs_task_execution_role.name
+  policy_arn = aws_iam_policy.get-acm-policy.arn
+}
+
+#TODO figure out how to manage acces to certs in more convinient and relieable way
+resource "aws_iam_policy" "get-acm-policy" {
+  name        = "get-acm-policy"
+  description = "get-acm-policy"
+
+  policy = <<EOF
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Sid": "",
+            "Effect": "Allow",
+            "Action": "acm:ExportCertificate",
+            "Resource": "${aws_acm_certificate.frontend_cert.arn}"
+        },
+        {
+            "Sid": "",
+            "Effect": "Allow",
+            "Action": "acm:ExportCertificate",
+            "Resource": "${aws_acm_certificate.backend_cert.arn}"
+        },
+        {
+            "Sid": "",
+            "Effect": "Allow",
+            "Action": "acm:ExportCertificate",
+            "Resource": "${aws_acm_certificate.gateway_cert.arn}"
+        },
+        {
+            "Sid": "",
+            "Effect": "Allow",
+            "Action": "acm-pca:GetCertificateAuthorityCertificate",
+            "Resource": "${aws_acmpca_certificate_authority.mesh_ca.arn}"
+        }
+    ]
+}
+EOF
+}

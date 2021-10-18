@@ -165,16 +165,18 @@ resource "aws_appmesh_virtual_node" "backend" {
   mesh_name = aws_appmesh_mesh.ecs_mesh.name
 
   spec {
-    # backend {
-    #   virtual_service {
-    #     virtual_service_name = "${local.backend_name}.${var.prefix}"
-    #   }
-    # }
-
     listener {
       port_mapping {
         port     = var.app_port
         protocol = "http"
+      }
+      tls {
+        mode = "STRICT"
+        certificate {
+          acm {
+            certificate_arn = aws_acm_certificate.backend_cert.arn # Server cert configuration
+          }
+        } 
       }
     }
     logging {
@@ -192,30 +194,8 @@ resource "aws_appmesh_virtual_node" "backend" {
     }
   }
 }
-
-# resource "aws_appmesh_gateway_route" "backend" {
-#   name                 = "${var.prefix}-${var.mesh_name}-${local.backend_name}-route"
-#   mesh_name            = aws_appmesh_mesh.ecs_mesh.name
-#   virtual_gateway_name = aws_appmesh_virtual_gateway.app_gateway.name
-
-#   spec {
-#     http_route {
-#       action {
-#         target {
-#           virtual_service {
-#             virtual_service_name = aws_appmesh_virtual_service.backend.name
-#           }
-#         }
-#       }
-
-#       match {
-#         prefix = "/"
-#       }
-#     }
-#   }
-# }
 resource "aws_appmesh_virtual_service" "backend" {
-  name      = "backend.${var.prefix}.local"
+  name      = "${local.backend_name}.${var.prefix}.${var.root_mesh_domain}"
   mesh_name = aws_appmesh_mesh.ecs_mesh.name
 
   spec {
@@ -239,5 +219,14 @@ resource "aws_service_discovery_service" "backend" {
   }
   health_check_custom_config {
     failure_threshold = 1
+  }
+}
+
+resource "aws_acm_certificate" "backend_cert" {
+  domain_name       = "${local.backend_name}.${var.prefix}.${var.root_mesh_domain}"
+  certificate_authority_arn = aws_acmpca_certificate_authority.mesh_ca.arn
+
+  lifecycle {
+    create_before_destroy = true
   }
 }
