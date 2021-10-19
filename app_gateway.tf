@@ -17,8 +17,10 @@ resource "aws_alb_target_group" "app_gateway" {
 # Redirect all traffic from the ALB to the target group
 resource "aws_alb_listener" "app_gateway" {
   load_balancer_arn = "${aws_alb.ecs_vpc.id}"
-  port              = "80"
-  protocol          = "HTTP"
+  port              = "443"
+  protocol          = "HTTPS"
+  ssl_policy        = "ELBSecurityPolicy-2016-08"
+  certificate_arn   = aws_acm_certificate.alb_cert.arn
 
   default_action {
     target_group_arn = "${aws_alb_target_group.app_gateway.id}"
@@ -32,8 +34,8 @@ resource "aws_security_group" "lb" {
 
   ingress {
     protocol    = "tcp"
-    from_port   = 80
-    to_port     = 80
+    from_port   = 443
+    to_port     = 443
     cidr_blocks = ["69.181.181.129/32"]
     ipv6_cidr_blocks = ["2607:fb90:9eb8:9ba4:f06d:2670:16e9:8b03/128"]
   }
@@ -265,6 +267,15 @@ resource "aws_service_discovery_service" "app_gateway" {
 
 resource "aws_acm_certificate" "gateway_cert" {
   domain_name       = "gateway.${var.prefix}.${var.root_mesh_domain}"
+  certificate_authority_arn = aws_acmpca_certificate_authority.mesh_ca.arn
+
+  lifecycle {
+    create_before_destroy = true
+  }
+}
+
+resource "aws_acm_certificate" "alb_cert" {
+  domain_name       = "alb.${var.prefix}.${var.root_mesh_domain}"
   certificate_authority_arn = aws_acmpca_certificate_authority.mesh_ca.arn
 
   lifecycle {
