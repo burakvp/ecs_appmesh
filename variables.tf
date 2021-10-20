@@ -26,16 +26,16 @@ variable "az_count" {
 
 variable "frontend_image" {
   description = "Docker image to run in the ECS cluster"
-  default     = "514072627411.dkr.ecr.us-east-2.amazonaws.com/frontend:0.0.6"
+  default     = "514072627411.dkr.ecr.us-east-1.amazonaws.com/frontend:0.0.1"
 }
 
 variable "backend_image" {
   description = "Docker image to run in the ECS cluster"
-  default     = "514072627411.dkr.ecr.us-east-2.amazonaws.com/backend:0.0.3"
+  default     = "514072627411.dkr.ecr.us-east-1.amazonaws.com/backend:0.0.1"
 }
 variable "envoy_image" {
   description = "Docker image to run in the ECS cluster"
-  default     = "514072627411.dkr.ecr.us-east-1.amazonaws.com/envoy:0.0.12"
+  default     = "514072627411.dkr.ecr.us-east-1.amazonaws.com/envoy:0.0.1"
 }
 
 

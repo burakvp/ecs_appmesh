@@ -391,7 +391,7 @@ resource "aws_lambda_function" "gateway_cert_lambda" {
   }
 }
 
-# trigger after cert created
+# # trigger after cert created
 data "aws_lambda_invocation" "gatewat_cert_lambda" {
   function_name = aws_lambda_function.gateway_cert_lambda.function_name
   input = <<JSON
