@@ -63,10 +63,16 @@ resource "aws_ecs_task_definition" "backend" {
   },
   {
     "name": "${var.prefix}-${var.mesh_name}-${local.backend_name}-proxy",
-    "image": "840364872350.dkr.ecr.us-east-1.amazonaws.com/aws-appmesh-envoy:v1.17.2.0-prod",
+    "image": "${var.envoy_image}",
     "essential": true,
     "networkMode": "awsvpc",
     "memoryReservation": 256,
+    "secrets": [
+      {
+        "name": "CertSecret",
+        "valueFrom": "${aws_secretsmanager_secret.frontend_cert.arn}"
+      }
+    ],
     "environment": [
       {
         "name": "APPMESH_VIRTUAL_NODE_NAME",
@@ -172,6 +178,13 @@ resource "aws_appmesh_virtual_node" "backend" {
       }
       tls {
         mode = "STRICT"
+        validation {
+          trust {
+            file {
+              certificate_chain = "/keys/client_cert_chain.pem" #For client verification
+            }
+          }
+        }
         certificate {
           acm {
             certificate_arn = aws_acm_certificate.backend_cert.arn # Server cert configuration
@@ -229,4 +242,97 @@ resource "aws_acm_certificate" "backend_cert" {
   lifecycle {
     create_before_destroy = true
   }
+}
+
+
+### Labmda to get certificates
+
+resource "aws_secretsmanager_secret" "frontend_cert" {
+  name = "frontend_cert"
+}
+
+resource "aws_iam_role" "iam_for_lambda" {
+  name = "iam_for_lambda"
+
+  assume_role_policy = <<EOF
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Action": "sts:AssumeRole",
+      "Principal": {
+        "Service": "lambda.amazonaws.com"
+      },
+      "Effect": "Allow",
+      "Sid": ""
+    }
+  ]
+}
+EOF
+}
+
+resource "aws_iam_role_policy_attachment" "new-policy" {
+  role       = aws_iam_role.iam_for_lambda.name
+  policy_arn = aws_iam_policy.new-policy.arn
+}
+
+#TODO figure out how to manage acces to certs in more convinient and relieable way
+resource "aws_iam_policy" "new-policy" {
+  name        = "new-policy"
+  description = "new-policy"
+  # TODO FIX PERMISSIONS RESOURCE *
+  policy = <<EOF
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Sid": "",
+            "Effect": "Allow",
+            "Action": "secretsmanager:GetRandomPassword",
+            "Resource": "*"
+        },
+        {
+            "Sid": "",
+            "Effect": "Allow",
+            "Action": "secretsmanager:PutSecretValue",
+            "Resource": "*" 
+        },
+        {
+            "Sid": "",
+            "Effect": "Allow",
+            "Action": "acm:ExportCertificate",
+            "Resource": "${aws_acm_certificate.frontend_cert.arn}"
+        }
+    ]
+}
+EOF
+}
+
+data "archive_file" "lambda_zip" {
+    type          = "zip"
+    source_file   = "lambda.py"
+    output_path   = "lambda.zip"
+}
+
+
+resource "aws_lambda_function" "test_lambda" {
+  filename      = "lambda.zip"
+  function_name = "lambda_handler"
+  role          = aws_iam_role.iam_for_lambda.arn
+  handler       = "lambda.lambda_handler"
+
+  source_code_hash = data.archive_file.lambda_zip.output_base64sha256
+
+  runtime = "python3.8"
+
+  environment {
+    variables = {
+        CLIENT_CA = aws_acm_certificate.frontend_cert.arn
+        SECRET = aws_secretsmanager_secret.frontend_cert.arn
+    }
+  }
+}
+
+data "aws_secretsmanager_secret_version" "frontend_cert" {
+  secret_id = aws_secretsmanager_secret.frontend_cert.id
 }

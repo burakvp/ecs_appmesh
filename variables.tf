@@ -33,12 +33,11 @@ variable "backend_image" {
   description = "Docker image to run in the ECS cluster"
   default     = "514072627411.dkr.ecr.us-east-2.amazonaws.com/backend:0.0.3"
 }
-
-
-variable "ecs_gateway_image" {
+variable "envoy_image" {
   description = "Docker image to run in the ECS cluster"
-  default     = "840364872350.dkr.ecr.us-east-1.amazonaws.com/aws-appmesh-envoy:v1.17.2.0-prod"
+  default     = "514072627411.dkr.ecr.us-east-1.amazonaws.com/envoy:0.0.4"
 }
+
 
 variable "app_port" {
   description = "Port exposed by the docker image to redirect traffic to"

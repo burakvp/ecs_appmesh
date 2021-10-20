@@ -78,6 +78,12 @@ resource "aws_iam_policy" "get-acm-policy" {
             "Effect": "Allow",
             "Action": "acm-pca:GetCertificateAuthorityCertificate",
             "Resource": "${aws_acmpca_certificate_authority.mesh_ca.arn}"
+        },
+        {
+            "Sid": "",
+            "Effect": "Allow",
+            "Action": "secretsmanager:GetSecretValue",
+            "Resource": "*" 
         }
     ]
 }
