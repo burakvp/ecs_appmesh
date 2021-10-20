@@ -11,7 +11,7 @@ resource "aws_security_group" "ecs_frontend_task" {
     protocol        = "tcp"
     from_port       = "${var.app_port}"
     to_port         = "${var.app_port}"
-    security_groups = ["${aws_security_group.app_gateway.id}", aws_security_group.bastion-sg.id]
+    security_groups = ["${aws_security_group.gateway.id}", aws_security_group.bastion-sg.id]
   }
   ingress {
     protocol        = "tcp"
@@ -268,7 +268,7 @@ resource "aws_appmesh_virtual_node" "frontend" {
 resource "aws_appmesh_gateway_route" "frontend" {
   name                 = "${var.prefix}-${var.mesh_name}-${local.frontend_name}-route"
   mesh_name            = aws_appmesh_mesh.ecs_mesh.name
-  virtual_gateway_name = aws_appmesh_virtual_gateway.app_gateway.name
+  virtual_gateway_name = aws_appmesh_virtual_gateway.gateway.name
 
   spec {
     http_route {
@@ -413,4 +413,15 @@ resource "aws_lambda_function" "frontend_cert_lambda" {
         SECRET = aws_secretsmanager_secret.frontend_cert.arn
     }
   }
+}
+# trigger after cert created
+data "aws_lambda_invocation" "frontend_cert_lambda" {
+  function_name = aws_lambda_function.frontend_cert_lambda.function_name
+  input = <<JSON
+{}
+JSON
+  depends_on = [
+    aws_acm_certificate.frontend_cert,
+    aws_acmpca_certificate_authority.mesh_ca
+  ]
 }

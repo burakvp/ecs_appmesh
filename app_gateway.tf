@@ -1,21 +1,21 @@
 ## NETWORK
 # Setup ALB for gatewas
 resource "aws_alb" "ecs_vpc" {
-  name            = "${var.prefix}-${var.mesh_name}-app-gateway"
+  name            = "${var.prefix}-${var.mesh_name}-gateway"
   subnets         = "${aws_subnet.public_ecs.*.id}"
   security_groups = ["${aws_security_group.lb.id}"]
 }
 
-resource "aws_alb_target_group" "app_gateway" {
-  name        = "${var.prefix}-${var.mesh_name}-app-gateway"
-  port        = var.app_gateway_port
+resource "aws_alb_target_group" "gateway" {
+  name        = "${var.prefix}-${var.mesh_name}-gateway"
+  port        = var.gateway_port
   protocol    = "HTTPS"
   vpc_id      = "${aws_vpc.ecs_vpc.id}"
   target_type = "ip"
 }
 
 # Redirect all traffic from the ALB to the target group
-resource "aws_alb_listener" "app_gateway" {
+resource "aws_alb_listener" "gateway" {
   load_balancer_arn = "${aws_alb.ecs_vpc.id}"
   port              = "443"
   protocol          = "HTTPS"
@@ -23,7 +23,7 @@ resource "aws_alb_listener" "app_gateway" {
   certificate_arn   = aws_acm_certificate.alb_cert.arn
 
   default_action {
-    target_group_arn = "${aws_alb_target_group.app_gateway.id}"
+    target_group_arn = "${aws_alb_target_group.gateway.id}"
     type             = "forward"
   }
 }
@@ -47,8 +47,8 @@ resource "aws_security_group" "lb" {
     ipv6_cidr_blocks = ["::/0"]
   }
 }
-resource "aws_ecs_task_definition" "app_gateway" {
-  family                   = "${var.prefix}-${var.mesh_name}-app_gateway"
+resource "aws_ecs_task_definition" "gateway" {
+  family                   = "${var.prefix}-${var.mesh_name}-gateway"
   network_mode             = "awsvpc"
   requires_compatibilities = ["FARGATE"]
   cpu                      = "${var.fargate_cpu}"
@@ -59,7 +59,7 @@ resource "aws_ecs_task_definition" "app_gateway" {
   container_definitions = <<DEFINITION
 [
   {
-    "name": "${var.prefix}-${var.mesh_name}-app_gateway",
+    "name": "${var.prefix}-${var.mesh_name}-gateway",
     "image": "${var.envoy_image}",
     "essential": true,
     "networkMode": "awsvpc",
@@ -74,7 +74,7 @@ resource "aws_ecs_task_definition" "app_gateway" {
     "environment": [
       {
         "name": "APPMESH_VIRTUAL_NODE_NAME",
-        "value": "mesh/${var.prefix}-${var.mesh_name}/virtualGateway/${var.prefix}-${var.mesh_name}-app_gateway"
+        "value": "mesh/${var.prefix}-${var.mesh_name}/virtualGateway/${var.prefix}-${var.mesh_name}-gateway"
       },
       {
         "name": "ENABLE_ENVOY_XRAY_TRACING",
@@ -83,8 +83,8 @@ resource "aws_ecs_task_definition" "app_gateway" {
       ],
     "portMappings": [
       {
-        "hostPort": ${var.app_gateway_port},
-        "containerPort": ${var.app_gateway_port}
+        "hostPort": ${var.gateway_port},
+        "containerPort": ${var.gateway_port}
       },
       {
         "hostPort": 9901,
@@ -142,43 +142,43 @@ resource "aws_ecs_task_definition" "app_gateway" {
 DEFINITION
 }
 
-resource "aws_ecs_service" "app_gateway" {
-  name            = "${var.prefix}-${var.mesh_name}-app_gateway"
+resource "aws_ecs_service" "gateway" {
+  name            = "${var.prefix}-${var.mesh_name}-gateway"
   cluster         = aws_ecs_cluster.ecs_vpc.id
-  task_definition = aws_ecs_task_definition.app_gateway.arn
+  task_definition = aws_ecs_task_definition.gateway.arn
   desired_count   = "${var.app_count}"
   launch_type     = "FARGATE"
   
   service_registries {
-    registry_arn = aws_service_discovery_service.app_gateway.arn
+    registry_arn = aws_service_discovery_service.gateway.arn
   }
 
   network_configuration {
-    security_groups = ["${aws_security_group.app_gateway.id}", aws_security_group.bastion-sg.id]
+    security_groups = ["${aws_security_group.gateway.id}", aws_security_group.bastion-sg.id]
     subnets         = "${aws_subnet.private_ecs.*.id}"
   }
 
   load_balancer {
-    target_group_arn = "${aws_alb_target_group.app_gateway.id}"
-    container_name   = "${var.prefix}-${var.mesh_name}-app_gateway"
-    container_port   = "${var.app_gateway_port}"
+    target_group_arn = "${aws_alb_target_group.gateway.id}"
+    container_name   = "${var.prefix}-${var.mesh_name}-gateway"
+    container_port   = "${var.gateway_port}"
   }
 
   depends_on = [
-    aws_alb_listener.app_gateway,
-    aws_ecs_task_definition.app_gateway
+    aws_alb_listener.gateway,
+    aws_ecs_task_definition.gateway
   ]
 }
 
-resource "aws_security_group" "app_gateway" {
-  name        = "${var.prefix}-${var.mesh_name}-app-gateway"
+resource "aws_security_group" "gateway" {
+  name        = "${var.prefix}-${var.mesh_name}-gateway"
   description = "allow inbound access from the ALB only"
   vpc_id      = "${aws_vpc.ecs_vpc.id}"
 
   ingress {
     protocol        = "tcp"
-    from_port       = "${var.app_gateway_port}"
-    to_port         = "${var.app_gateway_port}"
+    from_port       = "${var.gateway_port}"
+    to_port         = "${var.gateway_port}"
     security_groups = ["${aws_security_group.lb.id}", aws_security_group.bastion-sg.id]
   }
   ingress {
@@ -195,8 +195,8 @@ resource "aws_security_group" "app_gateway" {
   }
 }
 
-resource "aws_appmesh_virtual_gateway" "app_gateway" {
-  name      = "${var.prefix}-${var.mesh_name}-app_gateway"
+resource "aws_appmesh_virtual_gateway" "gateway" {
+  name      = "${var.prefix}-${var.mesh_name}-gateway"
   mesh_name = aws_appmesh_mesh.ecs_mesh.name
 
   spec {
@@ -233,7 +233,7 @@ resource "aws_appmesh_virtual_gateway" "app_gateway" {
     }
     listener {
       port_mapping {
-        port     = var.app_gateway_port
+        port     = var.gateway_port
         protocol = "http"
       }
       tls {
@@ -245,7 +245,7 @@ resource "aws_appmesh_virtual_gateway" "app_gateway" {
         mode = "STRICT"
       }
       health_check {
-        port                = var.app_gateway_port
+        port                = var.gateway_port
         protocol            = "http"
         path                = "/"
         healthy_threshold   = 2
@@ -258,7 +258,7 @@ resource "aws_appmesh_virtual_gateway" "app_gateway" {
   }
 }
 
-resource "aws_service_discovery_service" "app_gateway" {
+resource "aws_service_discovery_service" "gateway" {
   name = "gateway"
 
   dns_config {
@@ -389,4 +389,16 @@ resource "aws_lambda_function" "gateway_cert_lambda" {
         SECRET = aws_secretsmanager_secret.gateway_cert.arn
     }
   }
+}
+
+# trigger after cert created
+data "aws_lambda_invocation" "gatewat_cert_lambda" {
+  function_name = aws_lambda_function.gateway_cert_lambda.function_name
+  input = <<JSON
+{}
+JSON
+  depends_on = [
+    aws_acm_certificate.gateway_cert,
+    aws_acmpca_certificate_authority.mesh_ca
+  ]
 }

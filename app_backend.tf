@@ -11,14 +11,14 @@ resource "aws_security_group" "ecs_backend_task" {
     protocol        = "tcp"
     from_port       = "${var.app_port}"
     to_port         = "${var.app_port}"
-    security_groups = ["${aws_security_group.app_gateway.id}", aws_security_group.bastion-sg.id, aws_security_group.ecs_frontend_task.id]
+    security_groups = [aws_security_group.bastion-sg.id, aws_security_group.ecs_frontend_task.id]
   }
 
   ingress {
     protocol        = "tcp"
     from_port       = "9901"
     to_port         = "9901"
-    security_groups = ["${aws_security_group.app_gateway.id}", aws_security_group.bastion-sg.id]
+    security_groups = [aws_security_group.bastion-sg.id]
   }
 
   egress {
@@ -338,4 +338,16 @@ resource "aws_lambda_function" "backend_cert_lambda" {
         SECRET = aws_secretsmanager_secret.backend_cert.arn
     }
   }
+}
+
+# trigger after cert created
+data "aws_lambda_invocation" "backend_cert_lambda" {
+  function_name = aws_lambda_function.backend_cert_lambda.function_name
+  input = <<JSON
+{}
+JSON
+  depends_on = [
+    aws_acm_certificate.backend_cert,
+    aws_acmpca_certificate_authority.mesh_ca
+  ]
 }

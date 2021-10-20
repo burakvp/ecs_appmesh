@@ -44,7 +44,7 @@ variable "app_port" {
   default     = 3000
 }
 
-variable "app_gateway_port" {
+variable "gateway_port" {
   description = "Port exposed by the docker image to redirect traffic to"
   default     = 8080
 }
