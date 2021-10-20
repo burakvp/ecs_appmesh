@@ -11,5 +11,5 @@ RUN yum update -y && \
 
 RUN mkdir /keys && chown 1337:1337 /keys 
 COPY entrypoint.sh /bin/entrypoint.sh
-RUN chmod +x /bin/entrypoint.shs
+RUN chmod +x /bin/entrypoint.sh
 CMD ["/bin/entrypoint.sh"]

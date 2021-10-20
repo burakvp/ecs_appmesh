@@ -70,7 +70,7 @@ resource "aws_ecs_task_definition" "backend" {
     "secrets": [
       {
         "name": "CertSecret",
-        "valueFrom": "${aws_secretsmanager_secret.frontend_cert.arn}"
+        "valueFrom": "${aws_secretsmanager_secret.backend_cert.arn}"
       }
     ],
     "environment": [
@@ -181,7 +181,7 @@ resource "aws_appmesh_virtual_node" "backend" {
         validation {
           trust {
             file {
-              certificate_chain = "/keys/client_cert_chain.pem" #For client verification
+              certificate_chain = "/keys/ca_cert.pem" #For client verification
             }
           }
         }
@@ -247,12 +247,12 @@ resource "aws_acm_certificate" "backend_cert" {
 
 ### Labmda to get certificates
 
-resource "aws_secretsmanager_secret" "frontend_cert" {
-  name = "frontend_cert"
+resource "aws_secretsmanager_secret" "backend_cert" {
+  name = "backend_cert"
 }
 
-resource "aws_iam_role" "iam_for_lambda" {
-  name = "iam_for_lambda"
+resource "aws_iam_role" "iam_for_lambda_backend" {
+  name = "iam_for_lambda_backend"
 
   assume_role_policy = <<EOF
 {
@@ -271,15 +271,15 @@ resource "aws_iam_role" "iam_for_lambda" {
 EOF
 }
 
-resource "aws_iam_role_policy_attachment" "new-policy" {
-  role       = aws_iam_role.iam_for_lambda.name
-  policy_arn = aws_iam_policy.new-policy.arn
+resource "aws_iam_role_policy_attachment" "fetch-backend-cert" {
+  role       = aws_iam_role.iam_for_lambda_backend.name
+  policy_arn = aws_iam_policy.fetch-backend-cert.arn
 }
 
 #TODO figure out how to manage acces to certs in more convinient and relieable way
-resource "aws_iam_policy" "new-policy" {
-  name        = "new-policy"
-  description = "new-policy"
+resource "aws_iam_policy" "fetch-backend-cert" {
+  name        = "fetch-backend-cert"
+  description = "fetch-backend-cert"
   # TODO FIX PERMISSIONS RESOURCE *
   policy = <<EOF
 {
@@ -301,38 +301,41 @@ resource "aws_iam_policy" "new-policy" {
             "Sid": "",
             "Effect": "Allow",
             "Action": "acm:ExportCertificate",
-            "Resource": "${aws_acm_certificate.frontend_cert.arn}"
+            "Resource": "${aws_acm_certificate.backend_cert.arn}"
+        },
+        {
+            "Sid": "",
+            "Effect": "Allow",
+            "Action": "acm-pca:GetCertificateAuthorityCertificate",
+            "Resource": "${aws_acmpca_certificate_authority.mesh_ca.arn}"
         }
     ]
 }
 EOF
 }
 
-data "archive_file" "lambda_zip" {
+data "archive_file" "backend_cert_lambda_zip" {
     type          = "zip"
     source_file   = "lambda.py"
     output_path   = "lambda.zip"
 }
 
 
-resource "aws_lambda_function" "test_lambda" {
+resource "aws_lambda_function" "backend_cert_lambda" {
   filename      = "lambda.zip"
-  function_name = "lambda_handler"
-  role          = aws_iam_role.iam_for_lambda.arn
+  function_name = "backend_lambda_handler"
+  role          = aws_iam_role.iam_for_lambda_backend.arn
   handler       = "lambda.lambda_handler"
 
-  source_code_hash = data.archive_file.lambda_zip.output_base64sha256
+  source_code_hash = data.archive_file.backend_cert_lambda_zip.output_base64sha256
 
   runtime = "python3.8"
 
   environment {
     variables = {
-        CLIENT_CA = aws_acm_certificate.frontend_cert.arn
-        SECRET = aws_secretsmanager_secret.frontend_cert.arn
+        CLIENT_CERT_ARN = aws_acm_certificate.backend_cert.arn
+        CA_CERT_ARN = aws_acmpca_certificate_authority.mesh_ca.arn
+        SECRET = aws_secretsmanager_secret.backend_cert.arn
     }
   }
-}
-
-data "aws_secretsmanager_secret_version" "frontend_cert" {
-  secret_id = aws_secretsmanager_secret.frontend_cert.id
 }
