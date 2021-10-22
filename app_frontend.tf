@@ -11,7 +11,7 @@ resource "aws_security_group" "ecs_frontend_task" {
     protocol        = "tcp"
     from_port       = "${var.app_port}"
     to_port         = "${var.app_port}"
-    security_groups = ["${aws_security_group.app_gateway.id}", aws_security_group.bastion-sg.id]
+    security_groups = ["${aws_security_group.gateway.id}", aws_security_group.bastion-sg.id]
   }
   ingress {
     protocol        = "tcp"
@@ -56,7 +56,7 @@ resource "aws_ecs_task_definition" "frontend" {
     "environment": [
       {
         "name": "BACKEND_URL",
-        "value": "http://backend.${var.prefix}.local:3000"
+        "value": "http://backend.${var.prefix}.${var.root_mesh_domain}:3000"
       }
     ],
     "portMappings": [
@@ -68,10 +68,16 @@ resource "aws_ecs_task_definition" "frontend" {
   },
   {
     "name": "${var.prefix}-${var.mesh_name}-${local.frontend_name}-proxy",
-    "image": "840364872350.dkr.ecr.us-east-1.amazonaws.com/aws-appmesh-envoy:v1.17.2.0-prod",
+    "image": "${var.envoy_image}",
     "essential": true,
     "networkMode": "awsvpc",
     "memoryReservation": 256,
+    "secrets": [
+      {
+        "name": "CertSecret",
+        "valueFrom": "${aws_secretsmanager_secret.frontend_cert.arn}"
+      }
+    ],
     "environment": [
       {
         "name": "APPMESH_VIRTUAL_NODE_NAME",
@@ -170,15 +176,77 @@ resource "aws_appmesh_virtual_node" "frontend" {
   mesh_name = aws_appmesh_mesh.ecs_mesh.name
 
   spec {
+    backend_defaults {
+      client_policy {
+          tls {
+            certificate {
+              file {
+                certificate_chain = "/keys/client_cert.pem"
+                private_key = "/keys/client_cert_key.pem"
+              }
+            }
+            validation {
+              subject_alternative_names {
+                match {
+                  exact = [aws_appmesh_virtual_service.backend.name] 
+                }
+              }
+              trust {
+                acm {
+                  certificate_authority_arns = [aws_acmpca_certificate_authority.mesh_ca.arn]
+                }
+              }
+            }
+          }
+      }
+    }
     backend {
       virtual_service {
         virtual_service_name = aws_appmesh_virtual_service.backend.name
+        client_policy {
+          tls {
+            certificate {
+              file {
+                certificate_chain = "/keys/client_cert.pem"
+                private_key = "/keys/client_cert_key.pem"
+              }
+            }
+            validation {
+              subject_alternative_names {
+                match {
+                  exact = [aws_appmesh_virtual_service.backend.name] 
+                }
+              }
+              trust {
+                acm {
+                  certificate_authority_arns = [aws_acmpca_certificate_authority.mesh_ca.arn]
+                }
+              }
+            }
+          }
+        }
       }
     }
     listener {
       port_mapping {
         port     = var.app_port
         protocol = "http"
+      }
+      tls {
+        mode = "STRICT"
+        validation {
+          trust {
+            file {
+              certificate_chain = "/keys/ca_cert.pem" #For client verification
+            }
+          }
+        }
+        certificate {
+          acm {
+            certificate_arn = aws_acm_certificate.frontend_cert.arn
+
+          }
+        } 
       }
     }
     logging {
@@ -200,7 +268,7 @@ resource "aws_appmesh_virtual_node" "frontend" {
 resource "aws_appmesh_gateway_route" "frontend" {
   name                 = "${var.prefix}-${var.mesh_name}-${local.frontend_name}-route"
   mesh_name            = aws_appmesh_mesh.ecs_mesh.name
-  virtual_gateway_name = aws_appmesh_virtual_gateway.app_gateway.name
+  virtual_gateway_name = aws_appmesh_virtual_gateway.gateway.name
 
   spec {
     http_route {
@@ -211,7 +279,6 @@ resource "aws_appmesh_gateway_route" "frontend" {
           }
         }
       }
-
       match {
         prefix = "/"
       }
@@ -219,7 +286,7 @@ resource "aws_appmesh_gateway_route" "frontend" {
   }
 }
 resource "aws_appmesh_virtual_service" "frontend" {
-  name      = "frontend"
+  name      = "${local.frontend_name}.${var.prefix}.${var.root_mesh_domain}"
   mesh_name = aws_appmesh_mesh.ecs_mesh.name
 
   spec {
@@ -244,4 +311,117 @@ resource "aws_service_discovery_service" "frontend" {
   health_check_custom_config {
     failure_threshold = 1
   }
+}
+
+# # Certificate
+resource "aws_acm_certificate" "frontend_cert" {
+  domain_name       = "${local.frontend_name}.${var.prefix}.${var.root_mesh_domain}"
+  certificate_authority_arn = aws_acmpca_certificate_authority.mesh_ca.arn
+
+  lifecycle {
+    create_before_destroy = true
+  }
+}
+resource "aws_iam_role" "iam_for_lambda_frontend" {
+  name = "iam_for_lambda_frontend"
+
+  assume_role_policy = <<EOF
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Action": "sts:AssumeRole",
+      "Principal": {
+        "Service": "lambda.amazonaws.com"
+      },
+      "Effect": "Allow",
+      "Sid": ""
+    }
+  ]
+}
+EOF
+}
+
+resource "aws_iam_role_policy_attachment" "fetch-frontend-cert" {
+  role       = aws_iam_role.iam_for_lambda_frontend.name
+  policy_arn = aws_iam_policy.fetch-frontend-cert.arn
+}
+
+#TODO figure out how to manage acces to certs in more convinient and relieable way
+resource "aws_iam_policy" "fetch-frontend-cert" {
+  name        = "fetch-frontend-cert"
+  description = "fetch-frontend-cert"
+  # TODO FIX PERMISSIONS RESOURCE *
+  policy = <<EOF
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Sid": "",
+            "Effect": "Allow",
+            "Action": "secretsmanager:GetRandomPassword",
+            "Resource": "*"
+        },
+        {
+            "Sid": "",
+            "Effect": "Allow",
+            "Action": "secretsmanager:PutSecretValue",
+            "Resource": "*" 
+        },
+        {
+            "Sid": "",
+            "Effect": "Allow",
+            "Action": "acm:ExportCertificate",
+            "Resource": "${aws_acm_certificate.frontend_cert.arn}"
+        },
+        {
+            "Sid": "",
+            "Effect": "Allow",
+            "Action": "acm-pca:GetCertificateAuthorityCertificate",
+            "Resource": "${aws_acmpca_certificate_authority.mesh_ca.arn}"
+        }
+    ]
+}
+EOF
+}
+
+resource "aws_secretsmanager_secret" "frontend_cert" {
+  name = "frontend_cert"
+}
+
+data "archive_file" "frontend_cert_lambda_zip" {
+    type          = "zip"
+    source_file   = "lambda.py"
+    output_path   = "lambda.zip"
+}
+
+
+resource "aws_lambda_function" "frontend_cert_lambda" {
+  filename      = "lambda.zip"
+  function_name = "frontend_lambda_handler"
+  role          = aws_iam_role.iam_for_lambda_frontend.arn
+  handler       = "lambda.lambda_handler"
+
+  source_code_hash = data.archive_file.frontend_cert_lambda_zip.output_base64sha256
+
+  runtime = "python3.8"
+
+  environment {
+    variables = {
+        CLIENT_CERT_ARN = aws_acm_certificate.frontend_cert.arn
+        CA_CERT_ARN = aws_acmpca_certificate_authority.mesh_ca.arn
+        SECRET = aws_secretsmanager_secret.frontend_cert.arn
+    }
+  }
+}
+# trigger after cert created
+data "aws_lambda_invocation" "frontend_cert_lambda" {
+  function_name = aws_lambda_function.frontend_cert_lambda.function_name
+  input = <<JSON
+{}
+JSON
+  depends_on = [
+    aws_acm_certificate.frontend_cert,
+    aws_acmpca_certificate_authority.mesh_ca
+  ]
 }

@@ -11,14 +11,14 @@ resource "aws_security_group" "ecs_backend_task" {
     protocol        = "tcp"
     from_port       = "${var.app_port}"
     to_port         = "${var.app_port}"
-    security_groups = ["${aws_security_group.app_gateway.id}", aws_security_group.bastion-sg.id, aws_security_group.ecs_frontend_task.id]
+    security_groups = [aws_security_group.bastion-sg.id, aws_security_group.ecs_frontend_task.id]
   }
 
   ingress {
     protocol        = "tcp"
     from_port       = "9901"
     to_port         = "9901"
-    security_groups = ["${aws_security_group.app_gateway.id}", aws_security_group.bastion-sg.id]
+    security_groups = [aws_security_group.bastion-sg.id]
   }
 
   egress {
@@ -63,10 +63,16 @@ resource "aws_ecs_task_definition" "backend" {
   },
   {
     "name": "${var.prefix}-${var.mesh_name}-${local.backend_name}-proxy",
-    "image": "840364872350.dkr.ecr.us-east-1.amazonaws.com/aws-appmesh-envoy:v1.17.2.0-prod",
+    "image": "${var.envoy_image}",
     "essential": true,
     "networkMode": "awsvpc",
     "memoryReservation": 256,
+    "secrets": [
+      {
+        "name": "CertSecret",
+        "valueFrom": "${aws_secretsmanager_secret.backend_cert.arn}"
+      }
+    ],
     "environment": [
       {
         "name": "APPMESH_VIRTUAL_NODE_NAME",
@@ -165,16 +171,25 @@ resource "aws_appmesh_virtual_node" "backend" {
   mesh_name = aws_appmesh_mesh.ecs_mesh.name
 
   spec {
-    # backend {
-    #   virtual_service {
-    #     virtual_service_name = "${local.backend_name}.${var.prefix}"
-    #   }
-    # }
-
     listener {
       port_mapping {
         port     = var.app_port
         protocol = "http"
+      }
+      tls {
+        mode = "STRICT"
+        validation {
+          trust {
+            file {
+              certificate_chain = "/keys/ca_cert.pem" #For client verification
+            }
+          }
+        }
+        certificate {
+          acm {
+            certificate_arn = aws_acm_certificate.backend_cert.arn # Server cert configuration
+          }
+        } 
       }
     }
     logging {
@@ -192,30 +207,8 @@ resource "aws_appmesh_virtual_node" "backend" {
     }
   }
 }
-
-# resource "aws_appmesh_gateway_route" "backend" {
-#   name                 = "${var.prefix}-${var.mesh_name}-${local.backend_name}-route"
-#   mesh_name            = aws_appmesh_mesh.ecs_mesh.name
-#   virtual_gateway_name = aws_appmesh_virtual_gateway.app_gateway.name
-
-#   spec {
-#     http_route {
-#       action {
-#         target {
-#           virtual_service {
-#             virtual_service_name = aws_appmesh_virtual_service.backend.name
-#           }
-#         }
-#       }
-
-#       match {
-#         prefix = "/"
-#       }
-#     }
-#   }
-# }
 resource "aws_appmesh_virtual_service" "backend" {
-  name      = "backend.${var.prefix}.local"
+  name      = "${local.backend_name}.${var.prefix}.${var.root_mesh_domain}"
   mesh_name = aws_appmesh_mesh.ecs_mesh.name
 
   spec {
@@ -240,4 +233,121 @@ resource "aws_service_discovery_service" "backend" {
   health_check_custom_config {
     failure_threshold = 1
   }
+}
+
+resource "aws_acm_certificate" "backend_cert" {
+  domain_name       = "${local.backend_name}.${var.prefix}.${var.root_mesh_domain}"
+  certificate_authority_arn = aws_acmpca_certificate_authority.mesh_ca.arn
+
+  lifecycle {
+    create_before_destroy = true
+  }
+}
+
+
+### Labmda to get certificates
+
+resource "aws_secretsmanager_secret" "backend_cert" {
+  name = "backend_cert"
+}
+
+resource "aws_iam_role" "iam_for_lambda_backend" {
+  name = "iam_for_lambda_backend"
+
+  assume_role_policy = <<EOF
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Action": "sts:AssumeRole",
+      "Principal": {
+        "Service": "lambda.amazonaws.com"
+      },
+      "Effect": "Allow",
+      "Sid": ""
+    }
+  ]
+}
+EOF
+}
+
+resource "aws_iam_role_policy_attachment" "fetch-backend-cert" {
+  role       = aws_iam_role.iam_for_lambda_backend.name
+  policy_arn = aws_iam_policy.fetch-backend-cert.arn
+}
+
+#TODO figure out how to manage acces to certs in more convinient and relieable way
+resource "aws_iam_policy" "fetch-backend-cert" {
+  name        = "fetch-backend-cert"
+  description = "fetch-backend-cert"
+  # TODO FIX PERMISSIONS RESOURCE *
+  policy = <<EOF
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Sid": "",
+            "Effect": "Allow",
+            "Action": "secretsmanager:GetRandomPassword",
+            "Resource": "*"
+        },
+        {
+            "Sid": "",
+            "Effect": "Allow",
+            "Action": "secretsmanager:PutSecretValue",
+            "Resource": "*" 
+        },
+        {
+            "Sid": "",
+            "Effect": "Allow",
+            "Action": "acm:ExportCertificate",
+            "Resource": "${aws_acm_certificate.backend_cert.arn}"
+        },
+        {
+            "Sid": "",
+            "Effect": "Allow",
+            "Action": "acm-pca:GetCertificateAuthorityCertificate",
+            "Resource": "${aws_acmpca_certificate_authority.mesh_ca.arn}"
+        }
+    ]
+}
+EOF
+}
+
+data "archive_file" "backend_cert_lambda_zip" {
+    type          = "zip"
+    source_file   = "lambda.py"
+    output_path   = "lambda.zip"
+}
+
+
+resource "aws_lambda_function" "backend_cert_lambda" {
+  filename      = "lambda.zip"
+  function_name = "backend_lambda_handler"
+  role          = aws_iam_role.iam_for_lambda_backend.arn
+  handler       = "lambda.lambda_handler"
+
+  source_code_hash = data.archive_file.backend_cert_lambda_zip.output_base64sha256
+
+  runtime = "python3.8"
+
+  environment {
+    variables = {
+        CLIENT_CERT_ARN = aws_acm_certificate.backend_cert.arn
+        CA_CERT_ARN = aws_acmpca_certificate_authority.mesh_ca.arn
+        SECRET = aws_secretsmanager_secret.backend_cert.arn
+    }
+  }
+}
+
+# trigger after cert created
+data "aws_lambda_invocation" "backend_cert_lambda" {
+  function_name = aws_lambda_function.backend_cert_lambda.function_name
+  input = <<JSON
+{}
+JSON
+  depends_on = [
+    aws_acm_certificate.backend_cert,
+    aws_acmpca_certificate_authority.mesh_ca
+  ]
 }

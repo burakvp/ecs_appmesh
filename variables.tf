@@ -33,19 +33,21 @@ variable "backend_image" {
   description = "Docker image to run in the ECS cluster"
   default     = ""
 }
-
-
-variable "ecs_gateway_image" {
+variable "envoy_image" {
   description = "Docker image to run in the ECS cluster"
-  default     = "840364872350.dkr.ecr.us-east-1.amazonaws.com/aws-appmesh-envoy:v1.17.2.0-prod"
+  default     = ""
 }
 
+variable "allow_ip_subnet" {
+  description = "Allow ip subnet"
+  default     = "0.0.0.0/0"
+}
 variable "app_port" {
   description = "Port exposed by the docker image to redirect traffic to"
   default     = 3000
 }
 
-variable "app_gateway_port" {
+variable "gateway_port" {
   description = "Port exposed by the docker image to redirect traffic to"
   default     = 8080
 }
@@ -68,4 +70,9 @@ variable "fargate_memory" {
 variable "bastion_pubkey" {
   description = "Fargate instance memory to provision (in MiB)"
   default     = ""
+}
+
+variable "root_mesh_domain" {
+  description = "Top level domain of private DNS"
+  default = "ecs-mesh"
 }
