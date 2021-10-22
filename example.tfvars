@@ -1,0 +1,5 @@
+frontend_image = "frontend:0.0.1"
+backend_image  = "backend:0.0.1"
+envoy_image = "envoy:0.0.1"
+bastion_pubkey = ""
+allow_ip_subnet = "10.0.0.1/32"

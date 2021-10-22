@@ -36,15 +36,13 @@ resource "aws_security_group" "lb" {
     protocol    = "tcp"
     from_port   = 443
     to_port     = 443
-    cidr_blocks = ["69.181.181.129/32"]
-    ipv6_cidr_blocks = ["2607:fb90:9eb8:9ba4:f06d:2670:16e9:8b03/128"]
+    cidr_blocks = ["${var.allow_ip_subnet}"]
   }
   egress {
     from_port = 0
     to_port   = 0
     protocol  = "-1"
     cidr_blocks = ["0.0.0.0/0"]
-    ipv6_cidr_blocks = ["::/0"]
   }
 }
 resource "aws_ecs_task_definition" "gateway" {
