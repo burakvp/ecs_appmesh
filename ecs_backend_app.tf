@@ -2,6 +2,85 @@
 locals {
   backend_name = "backend"
 }
+data "aws_iam_policy_document" "backend_task_execution_role" {
+  // version for policy
+  version   = "2012-10-17"
+  // state for policy to allow service to assume role
+  statement {
+    sid     = ""
+    effect  = "Allow"
+    actions = ["sts:AssumeRole"]
+
+    principals {
+      type        = "Service"
+      identifiers = ["ecs-tasks.amazonaws.com"]
+    }
+  }
+}
+
+// ecs task execution role
+resource "aws_iam_role" "backend_task_execution_role" {
+  // set name for role 
+  name                = "backend-task-execution-role"
+  // attach policy to role 
+  assume_role_policy  =  data.aws_iam_policy_document.backend_task_execution_role.json
+}
+
+// ecs task execution role policy attachment
+resource "aws_iam_role_policy_attachment" "backend_task_execution_role" {
+  role        = aws_iam_role.backend_task_execution_role.name
+  policy_arn  = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
+}
+
+
+// ecs task allow appmesh permissions policy attachment
+resource "aws_iam_role_policy_attachment" "backend_appmesh_envoy_access_role" {
+  role        = aws_iam_role.backend_task_execution_role.name
+  policy_arn  = "arn:aws:iam::aws:policy/AWSAppMeshEnvoyAccess"
+}
+
+// ecs task allow xray permissions 
+resource "aws_iam_role_policy_attachment" "backend_xray_write_role" {
+  role        = aws_iam_role.backend_task_execution_role.name
+  policy_arn  = "arn:aws:iam::aws:policy/AWSXRayDaemonWriteAccess"
+}
+
+resource "aws_iam_role_policy_attachment" "backend-cert-policy" {
+  role       = aws_iam_role.backend_task_execution_role.name
+  policy_arn = aws_iam_policy.backend-get-acm-policy.arn
+}
+
+#TODO figure out how to manage acces to certs in more convinient and relieable way
+resource "aws_iam_policy" "backend-get-acm-policy" {
+  name        = "backend-get-acm-policy"
+  description = "get-acm-policy"
+
+  policy = <<EOF
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Sid": "",
+            "Effect": "Allow",
+            "Action": "acm:ExportCertificate",
+            "Resource": "${aws_acm_certificate.backend_cert.arn}"
+        },
+        {
+            "Sid": "",
+            "Effect": "Allow",
+            "Action": "acm-pca:GetCertificateAuthorityCertificate",
+            "Resource": "${aws_acmpca_certificate_authority.mesh_ca.arn}"
+        },
+        {
+            "Sid": "",
+            "Effect": "Allow",
+            "Action": "secretsmanager:GetSecretValue",
+            "Resource": "${aws_secretsmanager_secret.backend_cert.arn}" 
+        }
+    ]
+}
+EOF
+}
 resource "aws_security_group" "ecs_backend_task" {
   name        = "${var.prefix}-${var.mesh_name}-${local.backend_name}"
   description = "Allow from application gateway"
@@ -35,9 +114,9 @@ resource "aws_ecs_task_definition" "backend" {
   requires_compatibilities = ["FARGATE"]
   cpu                      = "${var.fargate_cpu}"
   memory                   = "${var.fargate_memory}"
-  task_role_arn             = aws_iam_role.ecs_task_execution_role.arn
+  task_role_arn             = aws_iam_role.backend_task_execution_role.arn
   // attach a role to definition described in role.tf
-  execution_role_arn        = aws_iam_role.ecs_task_execution_role.arn
+  execution_role_arn        = aws_iam_role.backend_task_execution_role.arn
   container_definitions = <<DEFINITION
 [
   {

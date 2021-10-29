@@ -1,3 +1,38 @@
+### ECS Cluster
+resource "aws_ecs_cluster" "ecs_vpc" {
+  name = "${var.prefix}-${var.mesh_name}"
+}
+
+### ECR for storing images
+resource "aws_ecr_repository" "frontend" {
+  name                 = "frontend"
+}
+resource "aws_ecr_repository" "backend" {
+  name                 = "backend"
+}
+resource "aws_ecr_repository" "envoy" {
+  name                 = "envoy"
+}
+
+### AWS App Mesh
+resource "aws_appmesh_mesh" "ecs_mesh" {
+  name = "${var.prefix}-${var.mesh_name}"
+  spec {
+    egress_filter {
+      type = "DROP_ALL"
+    }
+  }
+}
+
+### Service Discovery Namespace
+resource "aws_service_discovery_private_dns_namespace" "main" {
+  name        = "${var.prefix}.${var.root_mesh_domain}"
+  description = "all services will be registered under this common namespace"
+  vpc         = aws_vpc.ecs_vpc.id
+}
+
+### AWS ACM PCA
+
 resource "aws_acmpca_certificate_authority_certificate" "mesh_ca" {
   certificate_authority_arn = aws_acmpca_certificate_authority.mesh_ca.arn
 
