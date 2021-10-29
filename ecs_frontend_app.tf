@@ -1,8 +1,9 @@
-# Traffic to the ECS Cluster should only come from the ALB
 locals {
   frontend_name = "frontend"
 }
+### IAM for gateway task. The gateway will be run with this role
 
+# Assume role policy
 data "aws_iam_policy_document" "frontend_task_execution_role" {
   // version for policy
   version   = "2012-10-17"
@@ -19,28 +20,26 @@ data "aws_iam_policy_document" "frontend_task_execution_role" {
   }
 }
 
-// ecs task execution role
+# Create execution roles that will be used by task
 resource "aws_iam_role" "frontend_task_execution_role" {
-  // set name for role 
   name                = "frontend-task-execution-role"
-  // attach policy to role 
   assume_role_policy  =  data.aws_iam_policy_document.frontend_task_execution_role.json
 }
 
-// ecs task execution role policy attachment
+# Attach common AmazonECSTaskExecutionRolePolicy to execution role
 resource "aws_iam_role_policy_attachment" "frontend_task_execution_role" {
   role        = aws_iam_role.frontend_task_execution_role.name
   policy_arn  = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
 }
 
 
-// ecs task allow appmesh permissions policy attachment
+# Attach role to access AWSAppMesh
 resource "aws_iam_role_policy_attachment" "frontend_appmesh_envoy_access_role" {
   role        = aws_iam_role.frontend_task_execution_role.name
   policy_arn  = "arn:aws:iam::aws:policy/AWSAppMeshEnvoyAccess"
 }
 
-// ecs task allow xray permissions 
+# Attach role to access XRAY API
 resource "aws_iam_role_policy_attachment" "frontend_xray_write_role" {
   role        = aws_iam_role.frontend_task_execution_role.name
   policy_arn  = "arn:aws:iam::aws:policy/AWSXRayDaemonWriteAccess"
@@ -51,7 +50,7 @@ resource "aws_iam_role_policy_attachment" "frontend-cert-policy" {
   policy_arn = aws_iam_policy.frontend-get-acm-policy.arn
 }
 
-#TODO figure out how to manage acces to certs in more convinient and relieable way
+# Policies to export certs from ACM
 resource "aws_iam_policy" "frontend-get-acm-policy" {
   name        = "frontend-get-acm-policy"
   description = "get-acm-policy"
@@ -83,6 +82,9 @@ resource "aws_iam_policy" "frontend-get-acm-policy" {
 EOF
 }
 
+### ECS Task related configuraiton
+
+# Configure security group for task. Specify security groups of apps that needs to connect to this service
 resource "aws_security_group" "ecs_frontend_task" {
   name        = "${var.prefix}-${var.mesh_name}-${local.frontend_name}"
   description = "Allow from application gateway"
@@ -109,6 +111,7 @@ resource "aws_security_group" "ecs_frontend_task" {
   }
 }
 
+# ECS task definition
 resource "aws_ecs_task_definition" "frontend" {
   family                   = "${var.prefix}-${var.mesh_name}-${local.frontend_name}"
   network_mode             = "awsvpc"
@@ -237,6 +240,7 @@ DEFINITION
   }
 }
 
+# ECS Service configuraion
 resource "aws_ecs_service" "frontend" {
   name            = "${var.prefix}-${var.mesh_name}-${local.frontend_name}"
   cluster         = "${aws_ecs_cluster.ecs_vpc.id}"
@@ -252,6 +256,24 @@ resource "aws_ecs_service" "frontend" {
   }
 }
 
+# Service Discovery
+resource "aws_service_discovery_service" "frontend" {
+  name = "${local.frontend_name}"
+
+  dns_config {
+    namespace_id = aws_service_discovery_private_dns_namespace.main.id
+    dns_records {
+      ttl  = 10
+      type = "A"
+    }
+    routing_policy = "MULTIVALUE"
+  }
+  health_check_custom_config {
+    failure_threshold = 1
+  }
+}
+
+### AWS App Mesh related configuraion
 resource "aws_appmesh_virtual_node" "frontend" {
   name      = "${var.prefix}-${var.mesh_name}-${local.frontend_name}"
   mesh_name = aws_appmesh_mesh.ecs_mesh.name
@@ -345,27 +367,6 @@ resource "aws_appmesh_virtual_node" "frontend" {
     }
   }
 }
-
-resource "aws_appmesh_gateway_route" "frontend" {
-  name                 = "${var.prefix}-${var.mesh_name}-${local.frontend_name}-route"
-  mesh_name            = aws_appmesh_mesh.ecs_mesh.name
-  virtual_gateway_name = aws_appmesh_virtual_gateway.gateway.name
-
-  spec {
-    http_route {
-      action {
-        target {
-          virtual_service {
-            virtual_service_name = aws_appmesh_virtual_service.frontend.name
-          }
-        }
-      }
-      match {
-        prefix = "/"
-      }
-    }
-  }
-}
 resource "aws_appmesh_virtual_service" "frontend" {
   name      = "${local.frontend_name}.${var.prefix}.${var.root_mesh_domain}"
   mesh_name = aws_appmesh_mesh.ecs_mesh.name
@@ -378,23 +379,10 @@ resource "aws_appmesh_virtual_service" "frontend" {
     }
   }
 }
-resource "aws_service_discovery_service" "frontend" {
-  name = "${local.frontend_name}"
 
-  dns_config {
-    namespace_id = aws_service_discovery_private_dns_namespace.main.id
-    dns_records {
-      ttl  = 10
-      type = "A"
-    }
-    routing_policy = "MULTIVALUE"
-  }
-  health_check_custom_config {
-    failure_threshold = 1
-  }
-}
+### Certificate operations
 
-# # Certificate
+# Issue end task certificate
 resource "aws_acm_certificate" "frontend_cert" {
   domain_name       = "${local.frontend_name}.${var.prefix}.${var.root_mesh_domain}"
   certificate_authority_arn = aws_acmpca_certificate_authority.mesh_ca.arn
@@ -402,7 +390,15 @@ resource "aws_acm_certificate" "frontend_cert" {
   lifecycle {
     create_before_destroy = true
   }
+
 }
+
+# Secret to store end certificate and key
+resource "aws_secretsmanager_secret" "frontend_cert" {
+  name = "frontend_cert"
+}
+
+# Assume role for lambda
 resource "aws_iam_role" "iam_for_lambda_frontend" {
   name = "iam_for_lambda_frontend"
 
@@ -423,16 +419,16 @@ resource "aws_iam_role" "iam_for_lambda_frontend" {
 EOF
 }
 
+# Attach needed policies
 resource "aws_iam_role_policy_attachment" "fetch-frontend-cert" {
   role       = aws_iam_role.iam_for_lambda_frontend.name
   policy_arn = aws_iam_policy.fetch-frontend-cert.arn
 }
 
-#TODO figure out how to manage acces to certs in more convinient and relieable way
+# Policy to fetch cerificates from ACM
 resource "aws_iam_policy" "fetch-frontend-cert" {
   name        = "fetch-frontend-cert"
   description = "fetch-frontend-cert"
-  # TODO FIX PERMISSIONS RESOURCE *
   policy = <<EOF
 {
     "Version": "2012-10-17",
@@ -447,7 +443,7 @@ resource "aws_iam_policy" "fetch-frontend-cert" {
             "Sid": "",
             "Effect": "Allow",
             "Action": "secretsmanager:PutSecretValue",
-            "Resource": "*" 
+            "Resource": "${aws_secretsmanager_secret.frontend_cert.arn}" 
         },
         {
             "Sid": "",
@@ -466,17 +462,13 @@ resource "aws_iam_policy" "fetch-frontend-cert" {
 EOF
 }
 
-resource "aws_secretsmanager_secret" "frontend_cert" {
-  name = "frontend_cert"
-}
-
 data "archive_file" "frontend_cert_lambda_zip" {
     type          = "zip"
     source_file   = "lambda.py"
     output_path   = "lambda.zip"
 }
 
-
+# Lambda fuction to fetch certificates from ACM and place to secret
 resource "aws_lambda_function" "frontend_cert_lambda" {
   filename      = "lambda.zip"
   function_name = "frontend_lambda_handler"
@@ -495,7 +487,8 @@ resource "aws_lambda_function" "frontend_cert_lambda" {
     }
   }
 }
-# trigger after cert created
+
+# Trigger lambda after cert created
 data "aws_lambda_invocation" "frontend_cert_lambda" {
   function_name = aws_lambda_function.frontend_cert_lambda.function_name
   input = <<JSON

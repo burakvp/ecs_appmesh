@@ -1,4 +1,6 @@
 ### IAM for gateway task. The gateway will be run with this role
+
+# Assume role policy
 data "aws_iam_policy_document" "gateway_task_execution_role" {
   version   = "2012-10-17"
   statement {
@@ -13,31 +15,35 @@ data "aws_iam_policy_document" "gateway_task_execution_role" {
   }
 }
 
+# Create execution roles that will be used by task
 resource "aws_iam_role" "gateway_task_execution_role" {
   name                = "gateway-task-execution-role"
   assume_role_policy  =  data.aws_iam_policy_document.gateway_task_execution_role.json
 }
-
+# Attach common AmazonECSTaskExecutionRolePolicy to execution role
 resource "aws_iam_role_policy_attachment" "gateway_task_execution_role" {
   role        = aws_iam_role.gateway_task_execution_role.name
   policy_arn  = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
 }
-
+# Attach role to access AWSAppMesh
 resource "aws_iam_role_policy_attachment" "gateway_appmesh_envoy_access_role" {
   role        = aws_iam_role.gateway_task_execution_role.name
   policy_arn  = "arn:aws:iam::aws:policy/AWSAppMeshEnvoyAccess"
 }
 
+# Attach role to access XRAY API
 resource "aws_iam_role_policy_attachment" "gateway_xray_write_role" {
   role        = aws_iam_role.gateway_task_execution_role.name
   policy_arn  = "arn:aws:iam::aws:policy/AWSXRayDaemonWriteAccess"
 }
 
+# Attach role to fetch certificates from ACM and Secret manager. Can be different attachment
 resource "aws_iam_role_policy_attachment" "gateway-cert-policy" {
   role       = aws_iam_role.gateway_task_execution_role.name
   policy_arn = aws_iam_policy.gateway-get-acm-policy.arn
 }
 
+# Policies to export certs from ACM
 resource "aws_iam_policy" "gateway-get-acm-policy" {
   name        = "gateway-get-acm-policy"
   description = "get-acm-policy"
@@ -69,14 +75,13 @@ resource "aws_iam_policy" "gateway-get-acm-policy" {
 EOF
 }
 
-## NETWORK
-# Setup ALB for gatewas
+### Setup ALB that will be pointed to Gateway task
 resource "aws_alb" "ecs_vpc" {
   name            = "${var.prefix}-${var.mesh_name}-gateway"
   subnets         = "${aws_subnet.public_ecs.*.id}"
   security_groups = ["${aws_security_group.lb.id}"]
 }
-
+# Create target group for ECS gateway task
 resource "aws_alb_target_group" "gateway" {
   name        = "${var.prefix}-${var.mesh_name}-gateway"
   port        = var.gateway_port
@@ -85,7 +90,7 @@ resource "aws_alb_target_group" "gateway" {
   target_type = "ip"
 }
 
-# Redirect all traffic from the ALB to the target group
+# Configure ALB Listener and point it to ECS task target group
 resource "aws_alb_listener" "gateway" {
   load_balancer_arn = "${aws_alb.ecs_vpc.id}"
   port              = "443"
@@ -98,6 +103,8 @@ resource "aws_alb_listener" "gateway" {
     type             = "forward"
   }
 }
+
+# Configure securiti group for ALB
 resource "aws_security_group" "lb" {
   name        = "${var.prefix}-${var.mesh_name}-alb"
   description = "controls access to the ALB"
@@ -116,6 +123,10 @@ resource "aws_security_group" "lb" {
     cidr_blocks = ["0.0.0.0/0"]
   }
 }
+
+### ECS Task related configuraiton
+
+# Configure task definitions
 resource "aws_ecs_task_definition" "gateway" {
   family                   = "${var.prefix}-${var.mesh_name}-gateway"
   network_mode             = "awsvpc"
@@ -123,7 +134,6 @@ resource "aws_ecs_task_definition" "gateway" {
   cpu                      = "${var.fargate_cpu}"
   memory                   = "${var.fargate_memory}"
   task_role_arn             = aws_iam_role.gateway_task_execution_role.arn
-  // attach a role to definition described in role.tf
   execution_role_arn        = aws_iam_role.gateway_task_execution_role.arn
   container_definitions = <<DEFINITION
 [
@@ -211,6 +221,7 @@ resource "aws_ecs_task_definition" "gateway" {
 DEFINITION
 }
 
+# Configure ECS Service
 resource "aws_ecs_service" "gateway" {
   name            = "${var.prefix}-${var.mesh_name}-gateway"
   cluster         = aws_ecs_cluster.ecs_vpc.id
@@ -239,6 +250,24 @@ resource "aws_ecs_service" "gateway" {
   ]
 }
 
+# Register ECS task to service discovery
+resource "aws_service_discovery_service" "gateway" {
+  name = "gateway"
+
+  dns_config {
+    namespace_id = aws_service_discovery_private_dns_namespace.main.id
+    dns_records {
+      ttl  = 10
+      type = "A"
+    }
+    routing_policy = "MULTIVALUE"
+  }
+  health_check_custom_config {
+    failure_threshold = 1
+  }
+}
+
+# Configure security group for gateway. ALB security group needs ingress access here
 resource "aws_security_group" "gateway" {
   name        = "${var.prefix}-${var.mesh_name}-gateway"
   description = "allow inbound access from the ALB only"
@@ -264,6 +293,7 @@ resource "aws_security_group" "gateway" {
   }
 }
 
+### AWS App Mesh related configuraion 
 resource "aws_appmesh_virtual_gateway" "gateway" {
   name      = "${var.prefix}-${var.mesh_name}-gateway"
   mesh_name = aws_appmesh_mesh.ecs_mesh.name
@@ -327,25 +357,31 @@ resource "aws_appmesh_virtual_gateway" "gateway" {
   }
 }
 
-resource "aws_service_discovery_service" "gateway" {
-  name = "gateway"
+# Route to frontend
+resource "aws_appmesh_gateway_route" "frontend" {
+  name                 = "${var.prefix}-${var.mesh_name}-frontend-route"
+  mesh_name            = aws_appmesh_mesh.ecs_mesh.name
+  virtual_gateway_name = aws_appmesh_virtual_gateway.gateway.name
 
-  dns_config {
-    namespace_id = aws_service_discovery_private_dns_namespace.main.id
-    dns_records {
-      ttl  = 10
-      type = "A"
+  spec {
+    http_route {
+      action {
+        target {
+          virtual_service {
+            virtual_service_name = aws_appmesh_virtual_service.frontend.name
+          }
+        }
+      }
+      match {
+        prefix = "/"
+      }
     }
-    routing_policy = "MULTIVALUE"
-  }
-  health_check_custom_config {
-    failure_threshold = 1
   }
 }
 
+### Certificate operations
 
-# Certificate
-
+# Issue Gateway task certificate
 resource "aws_acm_certificate" "gateway_cert" {
   domain_name       = "gateway.${var.prefix}.${var.root_mesh_domain}"
   certificate_authority_arn = aws_acmpca_certificate_authority.mesh_ca.arn
@@ -355,6 +391,7 @@ resource "aws_acm_certificate" "gateway_cert" {
   }
 }
 
+# Issue ALB Certificate
 resource "aws_acm_certificate" "alb_cert" {
   domain_name       = "alb.${var.prefix}.${var.root_mesh_domain}"
   certificate_authority_arn = aws_acmpca_certificate_authority.mesh_ca.arn
@@ -365,12 +402,14 @@ resource "aws_acm_certificate" "alb_cert" {
 }
 
 
-### Labmda to get certificates
-
+# Secret to store end certificate and key
 resource "aws_secretsmanager_secret" "gateway_cert" {
   name = "gateway_cert"
 }
 
+### IAM for Lambda
+
+# Assume role for lambda
 resource "aws_iam_role" "iam_for_lambda_gateway" {
   name = "iam_for_lambda_gateway"
 
@@ -391,16 +430,16 @@ resource "aws_iam_role" "iam_for_lambda_gateway" {
 EOF
 }
 
+# Attach needed policies
 resource "aws_iam_role_policy_attachment" "fetch-gateway-cert" {
   role       = aws_iam_role.iam_for_lambda_gateway.name
   policy_arn = aws_iam_policy.fetch-gateway-cert.arn
 }
 
-#TODO figure out how to manage acces to certs in more convinient and relieable way
+# Policy to fetch cerificates from ACM
 resource "aws_iam_policy" "fetch-gateway-cert" {
   name        = "fetch-gateway-cert"
   description = "fetch-gateway-cert"
-  # TODO FIX PERMISSIONS RESOURCE *
   policy = <<EOF
 {
     "Version": "2012-10-17",
@@ -415,7 +454,7 @@ resource "aws_iam_policy" "fetch-gateway-cert" {
             "Sid": "",
             "Effect": "Allow",
             "Action": "secretsmanager:PutSecretValue",
-            "Resource": "*" 
+            "Resource": "${aws_secretsmanager_secret.gateway_cert.arn}" 
         },
         {
             "Sid": "",
@@ -441,6 +480,7 @@ data "archive_file" "gateway_cert_lambda_zip" {
 }
 
 
+# Lambda fuction to fetch certificates from ACM and place to secret
 resource "aws_lambda_function" "gateway_cert_lambda" {
   filename      = "lambda.zip"
   function_name = "gateway_lambda_handler"
@@ -460,7 +500,7 @@ resource "aws_lambda_function" "gateway_cert_lambda" {
   }
 }
 
-# # trigger after cert created
+# Trigger lambda after cert created
 data "aws_lambda_invocation" "gatewat_cert_lambda" {
   function_name = aws_lambda_function.gateway_cert_lambda.function_name
   input = <<JSON

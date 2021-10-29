@@ -18,6 +18,8 @@ def get_ca_certificate_chain(ca_arn):
 
 def get_client_certificate(client_cert):
     # TODO: erro handling
+
+    # TODO: gen password in code instead of getting it from SM?
     passphrase = sm.get_random_password(ExcludePunctuation=True)['RandomPassword']
     passphrase_enc = base64.b64encode(passphrase.encode('utf-8'))
     response = cm.export_certificate(CertificateArn=client_cert, Passphrase=passphrase_enc)
