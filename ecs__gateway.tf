@@ -63,12 +63,6 @@ resource "aws_iam_policy" "gateway-get-acm-policy" {
             "Effect": "Allow",
             "Action": "acm-pca:GetCertificateAuthorityCertificate",
             "Resource": "${aws_acmpca_certificate_authority.mesh_ca.arn}"
-        },
-        {
-            "Sid": "",
-            "Effect": "Allow",
-            "Action": "secretsmanager:GetSecretValue",
-            "Resource": "${aws_secretsmanager_secret.gateway_cert.arn}" 
         }
     ]
 }
@@ -144,12 +138,6 @@ resource "aws_ecs_task_definition" "gateway" {
     "networkMode": "awsvpc",
     "cpu": ${var.fargate_cpu},
     "memory": ${var.fargate_memory},
-    "secrets": [
-      {
-        "name": "CertSecret",
-        "valueFrom": "${aws_secretsmanager_secret.gateway_cert.arn}"
-      }
-    ],
     "environment": [
       {
         "name": "APPMESH_VIRTUAL_NODE_NAME",
@@ -309,12 +297,6 @@ resource "aws_appmesh_virtual_gateway" "gateway" {
     backend_defaults {
       client_policy {
         tls {
-          certificate {
-            file {
-              certificate_chain = "/keys/client_cert.pem"
-              private_key = "/keys/client_cert_key.pem"
-            }
-          }
           validation {
             subject_alternative_names {
               match {
@@ -379,8 +361,6 @@ resource "aws_appmesh_gateway_route" "frontend" {
   }
 }
 
-### Certificate operations
-
 # Issue Gateway task certificate
 resource "aws_acm_certificate" "gateway_cert" {
   domain_name       = "gateway.${var.prefix}.${var.root_mesh_domain}"
@@ -399,115 +379,4 @@ resource "aws_acm_certificate" "alb_cert" {
   lifecycle {
     create_before_destroy = true
   }
-}
-
-
-# Secret to store end certificate and key
-resource "aws_secretsmanager_secret" "gateway_cert" {
-  name = "gateway_cert"
-}
-
-### IAM for Lambda
-
-# Assume role for lambda
-resource "aws_iam_role" "iam_for_lambda_gateway" {
-  name = "iam_for_lambda_gateway"
-
-  assume_role_policy = <<EOF
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Action": "sts:AssumeRole",
-      "Principal": {
-        "Service": "lambda.amazonaws.com"
-      },
-      "Effect": "Allow",
-      "Sid": ""
-    }
-  ]
-}
-EOF
-}
-
-# Attach needed policies
-resource "aws_iam_role_policy_attachment" "fetch-gateway-cert" {
-  role       = aws_iam_role.iam_for_lambda_gateway.name
-  policy_arn = aws_iam_policy.fetch-gateway-cert.arn
-}
-
-# Policy to fetch cerificates from ACM
-resource "aws_iam_policy" "fetch-gateway-cert" {
-  name        = "fetch-gateway-cert"
-  description = "fetch-gateway-cert"
-  policy = <<EOF
-{
-    "Version": "2012-10-17",
-    "Statement": [
-        {
-            "Sid": "",
-            "Effect": "Allow",
-            "Action": "secretsmanager:GetRandomPassword",
-            "Resource": "*"
-        },
-        {
-            "Sid": "",
-            "Effect": "Allow",
-            "Action": "secretsmanager:PutSecretValue",
-            "Resource": "${aws_secretsmanager_secret.gateway_cert.arn}" 
-        },
-        {
-            "Sid": "",
-            "Effect": "Allow",
-            "Action": "acm:ExportCertificate",
-            "Resource": "${aws_acm_certificate.gateway_cert.arn}"
-        },
-        {
-            "Sid": "",
-            "Effect": "Allow",
-            "Action": "acm-pca:GetCertificateAuthorityCertificate",
-            "Resource": "${aws_acmpca_certificate_authority.mesh_ca.arn}"
-        }
-    ]
-}
-EOF
-}
-
-data "archive_file" "gateway_cert_lambda_zip" {
-    type          = "zip"
-    source_file   = "lambda.py"
-    output_path   = "lambda.zip"
-}
-
-
-# Lambda fuction to fetch certificates from ACM and place to secret
-resource "aws_lambda_function" "gateway_cert_lambda" {
-  filename      = "lambda.zip"
-  function_name = "gateway_lambda_handler"
-  role          = aws_iam_role.iam_for_lambda_gateway.arn
-  handler       = "lambda.lambda_handler"
-
-  source_code_hash = data.archive_file.gateway_cert_lambda_zip.output_base64sha256
-
-  runtime = "python3.8"
-
-  environment {
-    variables = {
-        CLIENT_CERT_ARN = aws_acm_certificate.gateway_cert.arn
-        CA_CERT_ARN = aws_acmpca_certificate_authority.mesh_ca.arn
-        SECRET = aws_secretsmanager_secret.gateway_cert.arn
-    }
-  }
-}
-
-# Trigger lambda after cert created
-data "aws_lambda_invocation" "gatewat_cert_lambda" {
-  function_name = aws_lambda_function.gateway_cert_lambda.function_name
-  input = <<JSON
-{}
-JSON
-  depends_on = [
-    aws_acm_certificate.gateway_cert,
-    aws_acmpca_certificate_authority.mesh_ca
-  ]
 }

@@ -69,12 +69,6 @@ resource "aws_iam_policy" "backend-get-acm-policy" {
             "Effect": "Allow",
             "Action": "acm-pca:GetCertificateAuthorityCertificate",
             "Resource": "${aws_acmpca_certificate_authority.mesh_ca.arn}"
-        },
-        {
-            "Sid": "",
-            "Effect": "Allow",
-            "Action": "secretsmanager:GetSecretValue",
-            "Resource": "${aws_secretsmanager_secret.backend_cert.arn}" 
         }
     ]
 }
@@ -150,12 +144,6 @@ resource "aws_ecs_task_definition" "backend" {
     "essential": true,
     "networkMode": "awsvpc",
     "memoryReservation": 256,
-    "secrets": [
-      {
-        "name": "CertSecret",
-        "valueFrom": "${aws_secretsmanager_secret.backend_cert.arn}"
-      }
-    ],
     "environment": [
       {
         "name": "APPMESH_VIRTUAL_NODE_NAME",
@@ -279,13 +267,6 @@ resource "aws_appmesh_virtual_node" "backend" {
       }
       tls {
         mode = "STRICT"
-        validation {
-          trust {
-            file {
-              certificate_chain = "/keys/ca_cert.pem" #For client verification
-            }
-          }
-        }
         certificate {
           acm {
             certificate_arn = aws_acm_certificate.backend_cert.arn # Server cert configuration
@@ -321,9 +302,7 @@ resource "aws_appmesh_virtual_service" "backend" {
   }
 }
 
-### Certificate operations
-
-# Issue end task certificate
+# Issue Gateway task certificate
 resource "aws_acm_certificate" "backend_cert" {
   domain_name       = "${local.backend_name}.${var.prefix}.${var.root_mesh_domain}"
   certificate_authority_arn = aws_acmpca_certificate_authority.mesh_ca.arn
@@ -331,111 +310,4 @@ resource "aws_acm_certificate" "backend_cert" {
   lifecycle {
     create_before_destroy = true
   }
-}
-
-# Secret to store end certificate and key
-resource "aws_secretsmanager_secret" "backend_cert" {
-  name = "backend_cert"
-}
-
-# Assume role for lambda
-resource "aws_iam_role" "iam_for_lambda_backend" {
-  name = "iam_for_lambda_backend"
-
-  assume_role_policy = <<EOF
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Action": "sts:AssumeRole",
-      "Principal": {
-        "Service": "lambda.amazonaws.com"
-      },
-      "Effect": "Allow",
-      "Sid": ""
-    }
-  ]
-}
-EOF
-}
-
-# Attach needed policies
-resource "aws_iam_role_policy_attachment" "fetch-backend-cert" {
-  role       = aws_iam_role.iam_for_lambda_backend.name
-  policy_arn = aws_iam_policy.fetch-backend-cert.arn
-}
-
-# Policy to fetch cerificates from ACM
-resource "aws_iam_policy" "fetch-backend-cert" {
-  name        = "fetch-backend-cert"
-  description = "fetch-backend-cert"
-  policy = <<EOF
-{
-    "Version": "2012-10-17",
-    "Statement": [
-        {
-            "Sid": "",
-            "Effect": "Allow",
-            "Action": "secretsmanager:GetRandomPassword",
-            "Resource": "*"
-        },
-        {
-            "Sid": "",
-            "Effect": "Allow",
-            "Action": "secretsmanager:PutSecretValue",
-            "Resource": "${aws_secretsmanager_secret.backend_cert.arn}" 
-        },
-        {
-            "Sid": "",
-            "Effect": "Allow",
-            "Action": "acm:ExportCertificate",
-            "Resource": "${aws_acm_certificate.backend_cert.arn}"
-        },
-        {
-            "Sid": "",
-            "Effect": "Allow",
-            "Action": "acm-pca:GetCertificateAuthorityCertificate",
-            "Resource": "${aws_acmpca_certificate_authority.mesh_ca.arn}"
-        }
-    ]
-}
-EOF
-}
-
-data "archive_file" "backend_cert_lambda_zip" {
-    type          = "zip"
-    source_file   = "lambda.py"
-    output_path   = "lambda.zip"
-}
-
-# Lambda fuction to fetch certificates from ACM and place to secret
-resource "aws_lambda_function" "backend_cert_lambda" {
-  filename      = "lambda.zip"
-  function_name = "backend_lambda_handler"
-  role          = aws_iam_role.iam_for_lambda_backend.arn
-  handler       = "lambda.lambda_handler"
-
-  source_code_hash = data.archive_file.backend_cert_lambda_zip.output_base64sha256
-
-  runtime = "python3.8"
-
-  environment {
-    variables = {
-        CLIENT_CERT_ARN = aws_acm_certificate.backend_cert.arn
-        CA_CERT_ARN = aws_acmpca_certificate_authority.mesh_ca.arn
-        SECRET = aws_secretsmanager_secret.backend_cert.arn
-    }
-  }
-}
-
-# Trigger lambda after cert created
-data "aws_lambda_invocation" "backend_cert_lambda" {
-  function_name = aws_lambda_function.backend_cert_lambda.function_name
-  input = <<JSON
-{}
-JSON
-  depends_on = [
-    aws_acm_certificate.backend_cert,
-    aws_acmpca_certificate_authority.mesh_ca
-  ]
 }
