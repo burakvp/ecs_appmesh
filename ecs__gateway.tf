@@ -69,6 +69,50 @@ resource "aws_iam_policy" "gateway-get-acm-policy" {
 EOF
 }
 
+resource "aws_lb" "ecs_nlb" {
+  name                             = "${var.prefix}-${var.mesh_name}-gateway-nlb"
+  load_balancer_type               = "network"
+  enable_cross_zone_load_balancing = "true"
+  internal = "false"
+  subnets  = "${aws_subnet.public_ecs.*.id}"
+}
+
+# adds a tcp listener to the load balancer and allows ingress
+resource "aws_lb_listener" "tcp" {
+  load_balancer_arn = aws_lb.ecs_nlb.id
+  port              = "443"
+  protocol          = "TCP"
+
+  default_action {
+    target_group_arn = "${aws_lb_target_group.gateway_nlb.id}"
+    type             = "forward"
+  }
+}
+
+# Create target group for ECS gateway task
+resource "aws_lb_target_group" "gateway_nlb" {
+  name        = "${var.prefix}-${var.mesh_name}-gateway-nlb"
+  port        = var.gateway_port
+  protocol    = "TCP"
+  vpc_id      = "${aws_vpc.ecs_vpc.id}"
+  target_type = "ip"
+  preserve_client_ip = "true"
+}
+# Needs to configure Security groups
+data "aws_network_interface" "nlb" {
+  count = length(aws_subnet.public_ecs.*.id)
+
+  filter {
+    name   = "description"
+    values = ["ELB ${aws_lb.ecs_nlb.arn_suffix}"]
+  }
+
+  filter {
+    name = "subnet-id"
+    values = ["${element(aws_subnet.public_ecs.*.id, count.index)}"]
+  }
+}
+
 ### Setup ALB that will be pointed to Gateway task
 resource "aws_alb" "ecs_vpc" {
   name            = "${var.prefix}-${var.mesh_name}-gateway"
@@ -222,7 +266,7 @@ resource "aws_ecs_service" "gateway" {
   }
 
   network_configuration {
-    security_groups = ["${aws_security_group.gateway.id}", aws_security_group.bastion-sg.id]
+    security_groups = ["${aws_security_group.gateway.id}"]
     subnets         = "${aws_subnet.private_ecs.*.id}"
   }
 
@@ -231,7 +275,12 @@ resource "aws_ecs_service" "gateway" {
     container_name   = "${var.prefix}-${var.mesh_name}-gateway"
     container_port   = "${var.gateway_port}"
   }
-
+  
+  load_balancer {
+    target_group_arn = "${aws_lb_target_group.gateway_nlb.id}"
+    container_name   = "${var.prefix}-${var.mesh_name}-gateway"
+    container_port   = "${var.gateway_port}"
+  }
   depends_on = [
     aws_alb_listener.gateway,
     aws_ecs_task_definition.gateway
@@ -260,13 +309,31 @@ resource "aws_security_group" "gateway" {
   name        = "${var.prefix}-${var.mesh_name}-gateway"
   description = "allow inbound access from the ALB only"
   vpc_id      = "${aws_vpc.ecs_vpc.id}"
-
+  # For ALB
   ingress {
     protocol        = "tcp"
     from_port       = "${var.gateway_port}"
     to_port         = "${var.gateway_port}"
     security_groups = ["${aws_security_group.lb.id}", aws_security_group.bastion-sg.id]
   }
+  # For NLB
+  ingress {
+    protocol        = "tcp"
+    from_port       = "${var.gateway_port}"
+    to_port         = "${var.gateway_port}"
+    cidr_blocks = formatlist(
+    "%s/32",
+    flatten(data.aws_network_interface.nlb.*.private_ips),
+  )
+  }
+  # For NLB
+  ingress {
+    protocol        = "tcp"
+    from_port       = "${var.gateway_port}"
+    to_port         = "${var.gateway_port}"
+    cidr_blocks = ["${var.allow_ip_subnet}"]
+  }
+  
   ingress {
     protocol        = "tcp"
     from_port       = "9901"
